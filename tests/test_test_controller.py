@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication
 
-from app.config import AudioConfig, MeasurementConfig
+from app.config import AudioConfig, CalibrationContext, MeasurementConfig
 from audio.audio_backend import (
     AudioBackend,
     AudioCallbackTime,
@@ -17,6 +17,7 @@ from audio.audio_backend import (
     AudioStreamStatus,
 )
 from audio.audio_device_manager import AudioDeviceManager
+from core.calibration_manager import CalibrationManager
 from core.device_service import DeviceService
 from core.test_controller import TestController as SessionController
 from core.test_models import TestSessionConfig as SessionConfig
@@ -72,6 +73,9 @@ def _session_config(
     simulation_delay_ms=20.0,
     compensation_ms=0.0,
     max_latency_ms=200.0,
+    calibration_profile=None,
+    output_device_name="",
+    input_device_name="",
 ):
     simulated = backend == "simulation"
     audio = AudioConfig(
@@ -96,6 +100,9 @@ def _session_config(
         audio=audio,
         measurement=measurement,
         compensation_ms=compensation_ms,
+        calibration_profile=calibration_profile,
+        output_device_name=output_device_name,
+        input_device_name=input_device_name,
     )
 
 
@@ -225,7 +232,26 @@ def test_simulated_controller_completes_and_preserves_compensation(controller_fa
     controller = controller_factory(_simulated_service())
     states = []
     controller.state_changed.connect(states.append)
-    config = _session_config(compensation_ms=2.0)
+    context = CalibrationContext(
+        output_device_id="sim-output",
+        output_device="模拟耳机输出",
+        input_device_id="sim-input",
+        input_device="模拟有线麦克风",
+        sample_rate=48000,
+        audio_mode="simulation",
+    )
+    profile = CalibrationManager.create_profile(
+        name="控制器校准追溯测试",
+        context=context,
+        compensation_ms=2.0,
+        calibration_method="确定性测试输入",
+    )
+    config = _session_config(
+        compensation_ms=2.0,
+        calibration_profile=profile,
+        output_device_name=context.output_device,
+        input_device_name=context.input_device,
+    )
 
     controller.start(config)
 
@@ -236,6 +262,21 @@ def test_simulated_controller_completes_and_preserves_compensation(controller_fa
     snapshot = controller.snapshot
     assert snapshot is not None and snapshot.is_simulation is True
     assert snapshot.completed_count == snapshot.valid_count == 2
+    assert snapshot.config.calibration_profile == profile
+    assert snapshot.config.calibration_context == context
+    assert snapshot.meets_minimum_valid is True
+    statistics = controller.statistics
+    assert statistics.valid_count == 2
+    assert statistics.invalid_count == 0
+    assert statistics.raw.count == statistics.compensated.count == 2
+    assert statistics.raw.mean_latency_ms == pytest.approx(20.0, abs=0.1)
+    assert statistics.compensated.mean_latency_ms == pytest.approx(18.0, abs=0.1)
+    assert statistics.raw.std_latency_ms >= 0.0
+    assert statistics.compensated.std_latency_ms == pytest.approx(
+        statistics.raw.std_latency_ms,
+        abs=1e-12,
+    )
+    assert snapshot.statistics == statistics
     for record in snapshot.records:
         assert record.measurement.is_simulation is True
         assert record.measurement.raw_latency_ms == pytest.approx(20.0, abs=0.1)
@@ -269,6 +310,10 @@ def test_invalid_simulated_measurement_is_retained(controller_factory):
     assert snapshot.completed_count == 1
     assert snapshot.valid_count == 0
     assert snapshot.invalid_count == 1
+    assert snapshot.meets_minimum_valid is False
+    assert snapshot.statistics.raw.count == 0
+    assert snapshot.statistics.compensated.count == 0
+    assert snapshot.statistics.invalid_reason_counts == (("latency_out_of_range", 1),)
     measurement = snapshot.records[0].measurement
     assert measurement.raw_latency_ms == pytest.approx(250.0, abs=0.1)
     assert "latency_out_of_range" in measurement.invalid_reason

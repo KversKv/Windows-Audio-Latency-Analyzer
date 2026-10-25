@@ -15,7 +15,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.config import AppConfig, ConfigManager
+from app.config import AppConfig, CalibrationConfig, CalibrationProfile, ConfigManager
+from core.calibration_manager import CalibrationManager
 from core.config_worker import ConfigSaveWorker
 from core.device_service import DeviceInventory, DeviceService
 from ui.comparison_page import ComparisonPage
@@ -62,13 +63,18 @@ class MainWindow(QMainWindow):
         self.test_page.devices_refreshed.connect(self._on_devices_refreshed)
         self.test_page.refresh_failed.connect(self._on_device_error)
         self.test_page.device_selection_changed.connect(self._on_device_selection_changed)
+        self.test_page.calibration_changed.connect(self._on_calibration_changed)
         self.test_page.state_changed.connect(self._on_test_state_changed)
         self.test_page.progress_changed.connect(self._on_test_progress_changed)
         self.test_page.audio_parameters_changed.connect(self._on_audio_parameters_changed)
         self.test_page.status_message.connect(self._on_test_status)
         self.test_page.session_save_requested.connect(self._on_session_save_requested)
         self.configuration_saved.connect(self.test_page.update_config)
+        self.configuration_saved.connect(self.settings_page.update_config)
         self.settings_page.save_requested.connect(self._save_settings)
+        self.settings_page.calibration_profile_save_requested.connect(
+            self._on_calibration_profile_save_requested
+        )
         QTimer.singleShot(0, self.test_page.refresh_devices)
 
     def _build_ui(self, device_service: DeviceService, config: AppConfig) -> None:
@@ -135,6 +141,7 @@ class MainWindow(QMainWindow):
     def _on_devices_refreshed(self, inventory: DeviceInventory) -> None:
         backend_text = "离线模拟（非真实测量）" if inventory.is_simulation else inventory.backend_name
         self.backend_status_label.setText(backend_text)
+        self._sync_calibration_context()
         self.statusBar().showMessage("设备列表已更新", 4000)
 
     def _on_device_error(self, message: str) -> None:
@@ -169,13 +176,30 @@ class MainWindow(QMainWindow):
                 input_device_id=self.test_page.selected_input_device_id(),
             ),
         )
+        self._sync_calibration_context()
+
+    def _on_calibration_changed(self, calibration: CalibrationConfig) -> None:
+        self._config = replace(self._config, calibration=calibration)
+
+    def _sync_calibration_context(self) -> None:
+        self.settings_page.set_calibration_context(self.test_page.calibration_context())
+
+    def _on_calibration_profile_save_requested(self, profile: CalibrationProfile) -> None:
+        try:
+            calibration = CalibrationManager.add_profile(self._config.calibration, profile)
+        except ValueError as exc:
+            self.settings_page.show_save_status(f"校准配置保存失败：{exc}")
+            return
+        self._save_config(replace(self._config, calibration=calibration))
 
     def _save_settings(self) -> None:
+        self._save_config(self.settings_page.apply_to(self._config))
+
+    def _save_config(self, new_config: AppConfig) -> None:
         if self._shutting_down:
             return
         if self._config_save_thread is not None and self._config_save_thread.isRunning():
             return
-        new_config = self.settings_page.apply_to(self._config)
         self._pending_config = new_config
         self.settings_page.set_save_enabled(False)
         self.settings_page.show_save_status("正在保存…")
@@ -200,12 +224,13 @@ class MainWindow(QMainWindow):
         previous_backend = self._config.audio.backend
         self._config = self._pending_config
         self._pending_config = None
-        message = "设置已保存"
+        message = "配置已保存"
         if previous_backend != self._config.audio.backend:
             message += "；后端切换将在重启后生效"
         self.settings_page.show_save_status(message)
         self.statusBar().showMessage(message, 5000)
         self.configuration_saved.emit(self._config)
+        self._sync_calibration_context()
 
     def _on_configuration_save_failed(self, message: str) -> None:
         self._pending_config = None

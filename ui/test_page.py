@@ -20,18 +20,23 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.config import AppConfig
+from app.config import AppConfig, CalibrationContext, CalibrationProfile
+from core.calibration_manager import CalibrationManager
+from core.latency_analyzer import LatencyMeasurement
 from core.device_service import (
     AudioDevice,
     DeviceEnumerationWorker,
     DeviceInventory,
     DeviceService,
 )
+from core.statistics_engine import SessionStatistics
 from core.test_controller import ControllerBusyError, SessionNotAvailableError, TestController
 from core.test_models import MeasurementRecord, TestSessionConfig, TestSessionSnapshot
 from core.test_state_machine import TestState
 
 logger = logging.getLogger(__name__)
+
+_DEVICE_NAME_ROLE = Qt.ItemDataRole.UserRole + 1
 
 _STATE_LABELS = {
     TestState.IDLE: "空闲",
@@ -74,6 +79,7 @@ class TestPage(QWidget):
     refresh_failed = Signal(str)
     refresh_finished = Signal()
     device_selection_changed = Signal()
+    calibration_changed = Signal(object)
     state_changed = Signal(object)
     progress_changed = Signal(int, int)
     audio_parameters_changed = Signal(int, int)
@@ -93,6 +99,8 @@ class TestPage(QWidget):
         self._refresh_thread: QThread | None = None
         self._refresh_worker: DeviceEnumerationWorker | None = None
         self._loading_devices = False
+        self._loading_calibration = False
+        self._manual_compensation_ms = config.calibration.manual_compensation_ms
         self._stop_requested = False
         self._shutting_down = False
         self._session_sample_rate = config.audio.sample_rate
@@ -108,6 +116,10 @@ class TestPage(QWidget):
         self.stop_button.clicked.connect(self.stop_test)
         self.clear_button.clicked.connect(self.clear_session)
         self.save_button.clicked.connect(self.request_save)
+        self.calibration_profile_combo.currentIndexChanged.connect(
+            self._on_calibration_selection_changed
+        )
+        self.compensation_spin.valueChanged.connect(self._on_manual_compensation_changed)
         self._update_controls()
 
     def _build_ui(self) -> None:
@@ -198,7 +210,7 @@ class TestPage(QWidget):
         self.compensation_spin.setRange(-1000.0, 1000.0)
         self.compensation_spin.setDecimals(2)
         self.compensation_spin.setSuffix(" ms")
-        self.compensation_spin.setValue(0.0)
+        self.compensation_spin.setValue(self._manual_compensation_ms)
         self.compensation_spin.setToolTip("手动补偿值；0 ms 表示未补偿，不代表已完成校准")
         self.amplitude_spin = QDoubleSpinBox()
         self.amplitude_spin.setRange(0.001, 1.0)
@@ -228,10 +240,35 @@ class TestPage(QWidget):
         self.simulation_delay_label.hide()
         parameter_layout.addWidget(self.simulation_delay_label, 1, 4)
         parameter_layout.addWidget(self.simulation_delay_spin, 2, 4)
+        calibration_label = QLabel("校准配置")
+        calibration_label.setObjectName("fieldLabel")
+        parameter_layout.addWidget(calibration_label, 3, 0)
+        self.calibration_profile_combo = QComboBox()
+        self.calibration_profile_combo.setMinimumContentsLength(28)
+        parameter_layout.addWidget(self.calibration_profile_combo, 4, 0, 1, 2)
+
+        minimum_valid_label = QLabel("最少有效样本")
+        minimum_valid_label.setObjectName("fieldLabel")
+        parameter_layout.addWidget(minimum_valid_label, 3, 2)
+        self.minimum_valid_count_spin = QSpinBox()
+        self.minimum_valid_count_spin.setRange(1, self.test_count_spin.value())
+        self.minimum_valid_count_spin.setSuffix(" 次")
+        self.minimum_valid_count_spin.setValue(self._config.measurement.minimum_valid_count)
+        self.minimum_valid_count_spin.setToolTip("只判定有效样本是否充足，不会删除无效或异常样本")
+        parameter_layout.addWidget(self.minimum_valid_count_spin, 4, 2)
+        self.test_count_spin.valueChanged.connect(self.minimum_valid_count_spin.setMaximum)
+
+        self.calibration_source_label = QLabel()
+        self.calibration_source_label.setObjectName("mutedLabel")
+        self.calibration_source_label.setWordWrap(True)
+        parameter_layout.addWidget(self.calibration_source_label, 5, 0, 1, 5)
+
         self._parameter_widgets = [
             self.test_count_spin,
+            self.minimum_valid_count_spin,
             self.warmup_spin,
             self.compensation_spin,
+            self.calibration_profile_combo,
             self.amplitude_spin,
             self.simulation_delay_spin,
         ]
@@ -242,34 +279,45 @@ class TestPage(QWidget):
         overview_layout.setContentsMargins(20, 22, 20, 14)
         overview_layout.setHorizontalSpacing(20)
         overview_layout.setVerticalSpacing(6)
-        metric_titles = [
-            "当前原始延迟",
-            "平均延迟",
-            "中位数",
-            "P95",
-            "最小值",
-            "最大值",
-            "标准差",
-            "有效样本",
-        ]
+        metric_titles = ("当前延迟", "平均值", "中位数 / P50", "P90", "P95", "最小值", "最大值", "标准差")
+        for column, heading in enumerate(("统计指标", "原始延迟", "补偿后延迟")):
+            heading_label = QLabel(heading)
+            heading_label.setObjectName("fieldLabel")
+            overview_layout.addWidget(heading_label, 0, column)
         self.metric_value_labels: list[QLabel] = []
-        for index, metric_title in enumerate(metric_titles):
-            row = (index // 4) * 2
-            column = index % 4
+        self.compensated_metric_value_labels: list[QLabel] = []
+        for row, metric_title in enumerate(metric_titles, start=1):
             name_label = QLabel(metric_title)
             name_label.setObjectName("metricName")
-            value_label = QLabel("—")
-            value_label.setObjectName("metricValue")
-            self.metric_value_labels.append(value_label)
-            overview_layout.addWidget(name_label, row, column)
-            overview_layout.addWidget(value_label, row + 1, column)
-        self.compensation_status_label = QLabel("补偿：0.00 ms（未补偿）")
+            raw_value_label = QLabel("—")
+            raw_value_label.setObjectName("metricValue")
+            compensated_value_label = QLabel("—")
+            compensated_value_label.setObjectName("metricValue")
+            self.metric_value_labels.append(raw_value_label)
+            self.compensated_metric_value_labels.append(compensated_value_label)
+            overview_layout.addWidget(name_label, row, 0)
+            overview_layout.addWidget(raw_value_label, row, 1)
+            overview_layout.addWidget(compensated_value_label, row, 2)
+
+        overview_layout.addWidget(QLabel("样本数（有效 / 无效）"), 9, 0)
+        self.valid_count_label = QLabel("0")
+        self.valid_count_label.setObjectName("metricValue")
+        self.invalid_count_label = QLabel("0")
+        self.invalid_count_label.setObjectName("metricValue")
+        overview_layout.addWidget(self.valid_count_label, 9, 1)
+        overview_layout.addWidget(self.invalid_count_label, 9, 2)
+        self.quality_summary_label = QLabel("质量汇总：尚无样本")
+        self.quality_summary_label.setObjectName("mutedLabel")
+        self.quality_summary_label.setWordWrap(True)
+        overview_layout.addWidget(self.quality_summary_label, 10, 0, 1, 3)
+        self.compensation_status_label = QLabel()
         self.compensation_status_label.setObjectName("mutedLabel")
-        overview_layout.addWidget(self.compensation_status_label, 4, 0, 1, 4)
-        self.measurement_status_label = QLabel("尚无测量结果；统计指标将在后续阶段接入")
+        self.compensation_status_label.setWordWrap(True)
+        overview_layout.addWidget(self.compensation_status_label, 11, 0, 1, 3)
+        self.measurement_status_label = QLabel("尚无测量结果；统计仅使用有效样本，全部原始记录均保留")
         self.measurement_status_label.setObjectName("mutedLabel")
         self.measurement_status_label.setWordWrap(True)
-        overview_layout.addWidget(self.measurement_status_label, 5, 0, 1, 4)
+        overview_layout.addWidget(self.measurement_status_label, 12, 0, 1, 3)
         root_layout.addWidget(overview)
 
         waveform_panel = QFrame()
@@ -342,6 +390,7 @@ class TestPage(QWidget):
             controls.addWidget(button)
         controls.addStretch()
         root_layout.addLayout(controls)
+        self._reload_calibration_profiles()
 
     @staticmethod
     def _make_plot(title: str) -> pg.PlotWidget:
@@ -375,25 +424,63 @@ class TestPage(QWidget):
     def selected_input_device_id(self) -> int | str | None:
         return self.input_combo.currentData()
 
+    def selected_output_device_name(self) -> str:
+        return self._selected_device_name(self.output_combo)
+
+    def selected_input_device_name(self) -> str:
+        return self._selected_device_name(self.input_combo)
+
+    @staticmethod
+    def _selected_device_name(combo: QComboBox) -> str:
+        name = combo.currentData(_DEVICE_NAME_ROLE)
+        return str(name) if name else ""
+
+    def calibration_context(self) -> CalibrationContext | None:
+        output_id = self.selected_output_device_id()
+        input_id = self.selected_input_device_id()
+        if output_id is None or input_id is None:
+            return None
+        return CalibrationContext(
+            output_device_id=output_id,
+            output_device=self.selected_output_device_name(),
+            input_device_id=input_id,
+            input_device=self.selected_input_device_name(),
+            sample_rate=self._config.audio.sample_rate,
+            audio_mode=self._config.audio.audio_mode,
+        )
+
+    def selected_calibration_profile(self) -> CalibrationProfile | None:
+        return self._config.calibration.profile_by_id(self.calibration_profile_combo.currentData())
+
     def session_config(self) -> TestSessionConfig:
+        context = self.calibration_context()
+        if context is None:
+            raise ValueError("请先选择有效的播放和录音设备")
         audio = replace(
             self._config.audio,
-            output_device_id=self.selected_output_device_id(),
-            input_device_id=self.selected_input_device_id(),
+            output_device_id=context.output_device_id,
+            input_device_id=context.input_device_id,
         )
         measurement = replace(
             self._config.measurement,
             default_test_count=self.test_count_spin.value(),
+            minimum_valid_count=self.minimum_valid_count_spin.value(),
             warmup_seconds=self.warmup_spin.value(),
             stimulus_amplitude=self.amplitude_spin.value(),
             simulation_delay_ms=self.simulation_delay_spin.value(),
         )
+        profile = self.selected_calibration_profile()
+        if profile is not None:
+            profile.require_match(context)
         return TestSessionConfig(
             audio=audio,
             measurement=measurement,
-            compensation_ms=self.compensation_spin.value(),
-            output_device_name=self.output_combo.currentText(),
-            input_device_name=self.input_combo.currentText(),
+            compensation_ms=(
+                profile.compensation_ms if profile is not None else self.compensation_spin.value()
+            ),
+            calibration_profile=profile,
+            output_device_name=context.output_device,
+            input_device_name=context.input_device,
         )
 
     def update_config(self, config: AppConfig) -> None:
@@ -401,9 +488,14 @@ class TestPage(QWidget):
         if self.controller.is_running:
             return
         self.test_count_spin.setValue(config.measurement.default_test_count)
+        self.minimum_valid_count_spin.setMaximum(config.measurement.default_test_count)
+        self.minimum_valid_count_spin.setValue(config.measurement.minimum_valid_count)
         self.warmup_spin.setValue(config.measurement.warmup_seconds)
         self.amplitude_spin.setValue(config.measurement.stimulus_amplitude)
         self.simulation_delay_spin.setValue(config.measurement.simulation_delay_ms)
+        self._manual_compensation_ms = config.calibration.manual_compensation_ms
+        self._reload_calibration_profiles()
+        self._update_controls()
 
     def start_test(self) -> None:
         if self.controller.is_running:
@@ -481,6 +573,7 @@ class TestPage(QWidget):
             is_output=False,
         )
         self._loading_devices = False
+        self._reload_calibration_profiles()
 
         self.backend_label.setText("离线模拟" if inventory.is_simulation else "真实音频设备")
         self.simulation_label.setVisible(inventory.is_simulation)
@@ -515,6 +608,7 @@ class TestPage(QWidget):
         combo.setEnabled(True)
         for device in devices:
             combo.addItem(self._device_text(device, is_output), device.identifier)
+            combo.setItemData(combo.count() - 1, device.name, _DEVICE_NAME_ROLE)
             combo.setItemData(
                 combo.count() - 1,
                 f"主机 API：{device.host_api}",
@@ -549,8 +643,109 @@ class TestPage(QWidget):
             return
         self._preferred_output_id = self.selected_output_device_id()
         self._preferred_input_id = self.selected_input_device_id()
+        self._reload_calibration_profiles()
         self.device_selection_changed.emit()
         self._update_controls()
+
+    def _reload_calibration_profiles(self) -> None:
+        self._loading_calibration = True
+        try:
+            self.calibration_profile_combo.clear()
+            self.calibration_profile_combo.addItem("手动补偿（未选择校准配置）", None)
+            context = self.calibration_context()
+            if context is not None:
+                for profile in self._config.calibration.profiles:
+                    if profile.matches(context):
+                        self.calibration_profile_combo.addItem(
+                            f"{profile.name} · {profile.compensation_ms:.2f} ms",
+                            profile.profile_id,
+                        )
+            selected_index = self.calibration_profile_combo.findData(
+                self._config.calibration.selected_profile_id
+            )
+            self.calibration_profile_combo.setCurrentIndex(max(selected_index, 0))
+            profile = self.selected_calibration_profile()
+            self.compensation_spin.setValue(
+                profile.compensation_ms if profile is not None else self._manual_compensation_ms
+            )
+        finally:
+            self._loading_calibration = False
+        self._update_calibration_details()
+        self._update_compensation_status()
+
+    def _on_calibration_selection_changed(self, _index: int) -> None:
+        if self._loading_calibration:
+            return
+        profile = self.selected_calibration_profile()
+        calibration = CalibrationManager.select_profile(
+            self._config.calibration,
+            profile.profile_id if profile is not None else None,
+        )
+        self._config = replace(self._config, calibration=calibration)
+        self._loading_calibration = True
+        try:
+            self.compensation_spin.setValue(
+                profile.compensation_ms if profile is not None else self._manual_compensation_ms
+            )
+        finally:
+            self._loading_calibration = False
+        self._update_calibration_details()
+        self._update_compensation_status()
+        self._update_controls()
+        self.calibration_changed.emit(calibration)
+
+    def _on_manual_compensation_changed(self, value: float) -> None:
+        if self._loading_calibration or self.selected_calibration_profile() is not None:
+            return
+        self._manual_compensation_ms = value
+        calibration = CalibrationManager.use_manual_compensation(self._config.calibration, value)
+        self._config = replace(self._config, calibration=calibration)
+        self._update_compensation_status()
+        self.calibration_changed.emit(calibration)
+
+    def _update_calibration_details(self) -> None:
+        profile = self.selected_calibration_profile()
+        if profile is None:
+            self.calibration_source_label.setText(
+                "未选择校准配置：使用手动补偿；0 ms 明确表示未补偿"
+            )
+            self.calibration_source_label.setToolTip("")
+            return
+        notes = profile.notes or "无备注"
+        self.calibration_source_label.setText(
+            f"校准来源：{profile.calibration_method} · 日期：{profile.calibration_date} · 备注：{notes}"
+        )
+        self.calibration_source_label.setToolTip(
+            f"播放：{profile.output_device}（ID {profile.output_device_id}）\n"
+            f"录音：{profile.input_device}（ID {profile.input_device_id}）\n"
+            f"采样率：{profile.sample_rate} Hz · 音频模式：{profile.audio_mode}"
+        )
+
+    def _update_compensation_status(
+        self,
+        measurement: LatencyMeasurement | None = None,
+    ) -> None:
+        profile = self.selected_calibration_profile()
+        compensation_ms = (
+            measurement.compensation_ms if measurement is not None else self.compensation_spin.value()
+        )
+        if profile is not None:
+            source = f"校准配置“{profile.name}”"
+        elif compensation_ms != 0:
+            source = "手动补偿"
+        else:
+            source = "未补偿"
+        compensated_text = (
+            f" · 当前补偿后 {measurement.compensated_latency_ms:.2f} ms"
+            if measurement is not None and measurement.compensated_latency_ms is not None
+            else ""
+        )
+        simulation_text = (
+            " · 模拟结果" if measurement is not None and measurement.is_simulation else ""
+        )
+        self.compensation_status_label.setText(
+            f"补偿：{compensation_ms:.2f} ms（{source}）{compensated_text}{simulation_text}"
+        )
 
     def _on_state_changed(self, state: TestState) -> None:
         self.state_label.setText(_STATE_LABELS[state])
@@ -583,22 +778,11 @@ class TestPage(QWidget):
     def _on_measurement(self, record: MeasurementRecord) -> None:
         measurement = record.measurement
         self.metric_value_labels[0].setText(self._format_ms(measurement.raw_latency_ms))
-        valid_count = sum(item.measurement.is_valid for item in self.controller.records)
-        self.metric_value_labels[7].setText(str(valid_count))
-        compensation_text = (
-            f"{measurement.compensation_ms:.2f} ms（手动补偿）"
-            if measurement.compensation_ms != 0
-            else "0.00 ms（未补偿）"
+        self.compensated_metric_value_labels[0].setText(
+            self._format_ms(measurement.compensated_latency_ms)
         )
-        compensated_text = (
-            f" · 当前补偿后 {measurement.compensated_latency_ms:.2f} ms"
-            if measurement.compensated_latency_ms is not None
-            else ""
-        )
-        simulation_text = " · 模拟结果" if measurement.is_simulation else ""
-        self.compensation_status_label.setText(
-            f"补偿：{compensation_text}{compensated_text}{simulation_text}"
-        )
+        self._update_statistics(self.controller.statistics)
+        self._update_compensation_status(measurement)
         if measurement.is_valid:
             snr_text = self._format_snr(measurement.snr_db)
             self.measurement_status_label.setText(
@@ -616,6 +800,39 @@ class TestPage(QWidget):
             self.measurement_status_label.setToolTip(reason)
         self._update_waveforms(record)
 
+    def _update_statistics(self, statistics: SessionStatistics) -> None:
+        for labels, values in (
+            (self.metric_value_labels, statistics.raw),
+            (self.compensated_metric_value_labels, statistics.compensated),
+        ):
+            aggregate_values = (
+                values.mean_latency_ms,
+                values.median_latency_ms,
+                values.p90_latency_ms,
+                values.p95_latency_ms,
+                values.min_latency_ms,
+                values.max_latency_ms,
+                values.std_latency_ms,
+            )
+            for label, value in zip(labels[1:], aggregate_values, strict=True):
+                label.setText(self._format_ms(value))
+
+        self.valid_count_label.setText(str(statistics.valid_count))
+        self.invalid_count_label.setText(str(statistics.invalid_count))
+        summary = (
+            f"质量汇总：有效 {statistics.valid_count} / {statistics.total_count}，"
+            f"无效 {statistics.invalid_count}；统计仅使用有效样本"
+        )
+        if statistics.invalid_reason_counts:
+            reasons = "、".join(
+                f"{_INVALID_REASON_LABELS.get(reason, reason)} × {count}"
+                for reason, count in statistics.invalid_reason_counts
+            )
+            summary += f"；无效原因：{reasons}"
+        if statistics.total_count and not statistics.meets_minimum_valid:
+            summary += f"；有效样本不足最低要求的 {statistics.minimum_valid_count} 次"
+        self.quality_summary_label.setText(summary)
+
     def _update_waveforms(self, record: MeasurementRecord) -> None:
         sample_rate = self._session_sample_rate
         reference_x = np.arange(record.reference.size, dtype=np.float64) * 1000 / sample_rate
@@ -628,11 +845,17 @@ class TestPage(QWidget):
             self.peak_line.setPos(lag * 1000 / sample_rate)
 
     def _on_session_finished(self, snapshot: TestSessionSnapshot) -> None:
+        self._update_statistics(snapshot.statistics)
         if snapshot.terminal_state == TestState.COMPLETED:
             simulation_text = "（离线模拟，非真实测量）" if snapshot.is_simulation else ""
+            minimum_text = (
+                ""
+                if snapshot.meets_minimum_valid
+                else f"；有效样本不足最低要求的 {snapshot.statistics.minimum_valid_count} 次"
+            )
             self.session_status_label.setText(
                 f"完成 {snapshot.completed_count} 次：有效 {snapshot.valid_count}，"
-                f"无效 {snapshot.invalid_count}{simulation_text}；音频资源已释放"
+                f"无效 {snapshot.invalid_count}{simulation_text}{minimum_text}；音频资源已释放"
             )
         self.session_finished.emit(snapshot)
         self._update_controls()
@@ -665,10 +888,13 @@ class TestPage(QWidget):
         self._update_controls()
 
     def _clear_results(self) -> None:
-        for label in self.metric_value_labels:
+        for label in (*self.metric_value_labels, *self.compensated_metric_value_labels):
             label.setText("—")
-        self.compensation_status_label.setText("补偿：0.00 ms（未补偿）")
-        self.measurement_status_label.setText("尚无测量结果；统计指标将在后续阶段接入")
+        self.valid_count_label.setText("0")
+        self.invalid_count_label.setText("0")
+        self.quality_summary_label.setText("质量汇总：尚无样本；统计仅使用有效样本")
+        self._update_compensation_status()
+        self.measurement_status_label.setText("尚无测量结果；统计仅使用有效样本，全部原始记录均保留")
         self.measurement_status_label.setToolTip("")
         self.session_status_label.setText("等待开始")
         self.error_label.hide()
@@ -699,6 +925,9 @@ class TestPage(QWidget):
         self.input_combo.setEnabled(has_input and not active and not refreshing)
         for widget in self._parameter_widgets:
             widget.setEnabled(not active and not self._shutting_down)
+        self.compensation_spin.setEnabled(
+            not active and not self._shutting_down and self.selected_calibration_profile() is None
+        )
 
     @staticmethod
     def _format_ms(value: float | None) -> str:

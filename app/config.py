@@ -3,6 +3,7 @@ import logging
 import math
 import os
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -42,10 +43,15 @@ class AudioConfig:
         if not 1.0 <= self.capture_buffer_seconds <= 60.0:
             raise ValueError("采集缓冲区时长必须在 1 到 60 秒之间")
 
+    @property
+    def audio_mode(self) -> str:
+        return "simulation" if self.backend == "simulation" else "wasapi_shared"
+
 
 @dataclass(frozen=True, slots=True)
 class MeasurementConfig:
     default_test_count: int = 30
+    minimum_valid_count: int = 1
     warmup_seconds: float = 3.0
     stimulus_start_frequency_hz: float = 500.0
     stimulus_end_frequency_hz: float = 8000.0
@@ -65,6 +71,8 @@ class MeasurementConfig:
     def __post_init__(self) -> None:
         if self.default_test_count < 1:
             raise ValueError("默认测试次数必须大于 0")
+        if not 1 <= self.minimum_valid_count <= self.default_test_count:
+            raise ValueError("最少有效样本数必须在 1 到测试次数之间")
         if not 1.0 <= self.warmup_seconds <= 15.0:
             raise ValueError("预热时间必须在 1 到 15 秒之间")
         frequencies = (self.stimulus_start_frequency_hz, self.stimulus_end_frequency_hz)
@@ -102,6 +110,101 @@ class MeasurementConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class CalibrationContext:
+    output_device_id: int | str | None
+    output_device: str
+    input_device_id: int | str | None
+    input_device: str
+    sample_rate: int
+    audio_mode: str
+
+    def __post_init__(self) -> None:
+        if not self.output_device.strip() or not self.input_device.strip():
+            raise ValueError("校准必须关联明确的播放和录音设备")
+        if not 8000 <= self.sample_rate <= 192000:
+            raise ValueError("校准采样率必须在 8000 到 192000 Hz 之间")
+        if not self.audio_mode.strip():
+            raise ValueError("校准必须关联音频模式")
+
+
+@dataclass(frozen=True, slots=True)
+class CalibrationProfile:
+    profile_id: str
+    name: str
+    output_device_id: int | str | None
+    output_device: str
+    input_device_id: int | str | None
+    input_device: str
+    sample_rate: int
+    audio_mode: str
+    compensation_ms: float
+    calibration_method: str
+    calibration_date: str
+    notes: str = ""
+
+    def __post_init__(self) -> None:
+        CalibrationContext(
+            output_device_id=self.output_device_id,
+            output_device=self.output_device,
+            input_device_id=self.input_device_id,
+            input_device=self.input_device,
+            sample_rate=self.sample_rate,
+            audio_mode=self.audio_mode,
+        )
+        if not self.profile_id.strip() or not self.name.strip():
+            raise ValueError("校准配置 ID 和名称不能为空")
+        if not math.isfinite(self.compensation_ms):
+            raise ValueError("补偿值必须为有限数值")
+        if not self.calibration_method.strip():
+            raise ValueError("校准方法不能为空")
+        try:
+            calibration_date = datetime.fromisoformat(self.calibration_date)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("校准日期必须是 ISO 8601 格式") from exc
+        if calibration_date.tzinfo is None or calibration_date.utcoffset() is None:
+            raise ValueError("校准日期必须包含时区")
+
+    def matches(self, context: CalibrationContext) -> bool:
+        return (
+            self.output_device_id == context.output_device_id
+            and self.output_device == context.output_device
+            and self.input_device_id == context.input_device_id
+            and self.input_device == context.input_device
+            and self.sample_rate == context.sample_rate
+            and self.audio_mode == context.audio_mode
+        )
+
+    def require_match(self, context: CalibrationContext) -> None:
+        if not self.matches(context):
+            raise ValueError("校准配置与当前设备、采样率或音频模式不匹配")
+
+
+@dataclass(frozen=True, slots=True)
+class CalibrationConfig:
+    profiles: tuple[CalibrationProfile, ...] = ()
+    selected_profile_id: str | None = None
+    manual_compensation_ms: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.manual_compensation_ms):
+            raise ValueError("手动补偿值必须为有限数值")
+        profile_ids = [profile.profile_id for profile in self.profiles]
+        if len(profile_ids) != len(set(profile_ids)):
+            raise ValueError("校准配置 ID 不能重复")
+        if self.selected_profile_id is not None and self.selected_profile_id not in profile_ids:
+            raise ValueError("所选校准配置不存在")
+
+    def profile_by_id(self, profile_id: str | None) -> CalibrationProfile | None:
+        if profile_id is None:
+            return None
+        return next((profile for profile in self.profiles if profile.profile_id == profile_id), None)
+
+    @property
+    def selected_profile(self) -> CalibrationProfile | None:
+        return self.profile_by_id(self.selected_profile_id)
+
+
+@dataclass(frozen=True, slots=True)
 class UiConfig:
     theme: str = "dark"
 
@@ -115,6 +218,7 @@ class AppConfig:
     format_version: int = 1
     audio: AudioConfig = field(default_factory=AudioConfig)
     measurement: MeasurementConfig = field(default_factory=MeasurementConfig)
+    calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
     ui: UiConfig = field(default_factory=UiConfig)
 
     def __post_init__(self) -> None:
@@ -146,6 +250,7 @@ class ConfigManager:
                 format_version=data.get("format_version", 1),
                 audio=AudioConfig(**self._section(data, "audio")),
                 measurement=MeasurementConfig(**self._section(data, "measurement")),
+                calibration=self._calibration(data),
                 ui=UiConfig(**self._section(data, "ui")),
             )
         except (OSError, TypeError, ValueError):
@@ -162,6 +267,18 @@ class ConfigManager:
         except OSError as exc:
             raise ConfigError(f"无法保存配置：{self.path}") from exc
         logger.info("配置已保存：%s", self.path)
+
+    @classmethod
+    def _calibration(cls, data: dict[str, Any]) -> CalibrationConfig:
+        section = cls._section(data, "calibration")
+        profiles = section.get("profiles", [])
+        if not isinstance(profiles, list) or not all(isinstance(item, dict) for item in profiles):
+            raise ValueError("校准配置列表必须是对象数组")
+        return CalibrationConfig(
+            profiles=tuple(CalibrationProfile(**item) for item in profiles),
+            selected_profile_id=section.get("selected_profile_id"),
+            manual_compensation_ms=section.get("manual_compensation_ms", 0.0),
+        )
 
     @staticmethod
     def _section(data: dict[str, Any], name: str) -> dict[str, Any]:

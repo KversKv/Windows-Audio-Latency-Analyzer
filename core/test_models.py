@@ -4,8 +4,9 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from app.config import AudioConfig, MeasurementConfig
+from app.config import AudioConfig, CalibrationContext, CalibrationProfile, MeasurementConfig
 from core.latency_analyzer import LatencyMeasurement
+from core.statistics_engine import SessionStatistics, StatisticsEngine
 from core.test_state_machine import TestState
 
 
@@ -14,6 +15,7 @@ class TestSessionConfig:
     audio: AudioConfig
     measurement: MeasurementConfig
     compensation_ms: float = 0.0
+    calibration_profile: CalibrationProfile | None = None
     output_device_name: str = ""
     input_device_name: str = ""
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -23,6 +25,26 @@ class TestSessionConfig:
             raise ValueError("补偿值必须为有限数值")
         if self.started_at.tzinfo is None or self.started_at.utcoffset() is None:
             raise ValueError("会话开始时间必须包含时区")
+        if self.calibration_profile is not None:
+            if not math.isclose(
+                self.compensation_ms,
+                self.calibration_profile.compensation_ms,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            ):
+                raise ValueError("会话补偿值必须与所选校准配置一致")
+            self.calibration_profile.require_match(self.calibration_context)
+
+    @property
+    def calibration_context(self) -> CalibrationContext:
+        return CalibrationContext(
+            output_device_id=self.audio.output_device_id,
+            output_device=self.output_device_name,
+            input_device_id=self.audio.input_device_id,
+            input_device=self.input_device_name,
+            sample_rate=self.audio.sample_rate,
+            audio_mode=self.audio.audio_mode,
+        )
 
     @property
     def test_count(self) -> int:
@@ -75,3 +97,14 @@ class TestSessionSnapshot:
     @property
     def invalid_count(self) -> int:
         return self.completed_count - self.valid_count
+
+    @property
+    def statistics(self) -> SessionStatistics:
+        return StatisticsEngine.calculate(
+            (record.measurement for record in self.records),
+            minimum_valid_count=self.config.measurement.minimum_valid_count,
+        )
+
+    @property
+    def meets_minimum_valid(self) -> bool:
+        return self.valid_count >= self.config.measurement.minimum_valid_count

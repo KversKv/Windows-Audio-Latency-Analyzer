@@ -1,4 +1,11 @@
-from app.config import AppConfig, AudioConfig, ConfigManager, MeasurementConfig
+from app.config import (
+    AppConfig,
+    AudioConfig,
+    CalibrationConfig,
+    CalibrationProfile,
+    ConfigManager,
+    MeasurementConfig,
+)
 
 
 def test_missing_config_returns_defaults(tmp_path):
@@ -24,6 +31,7 @@ def test_config_round_trip(tmp_path):
         ),
         measurement=MeasurementConfig(
             default_test_count=50,
+            minimum_valid_count=10,
             warmup_seconds=5.5,
             stimulus_start_frequency_hz=600,
             stimulus_end_frequency_hz=7000,
@@ -34,6 +42,26 @@ def test_config_round_trip(tmp_path):
             min_correlation=0.4,
             min_latency_ms=1,
             max_latency_ms=150,
+        ),
+        calibration=CalibrationConfig(
+            profiles=(
+                CalibrationProfile(
+                    profile_id="profile-1",
+                    name="测试校准",
+                    output_device_id="sim-output",
+                    output_device="模拟耳机输出",
+                    input_device_id="sim-input",
+                    input_device="模拟有线麦克风",
+                    sample_rate=96000,
+                    audio_mode="simulation",
+                    compensation_ms=1.25,
+                    calibration_method="已知合成延迟",
+                    calibration_date="2026-10-25T12:00:00+00:00",
+                    notes="仅用于配置往返验证",
+                ),
+            ),
+            selected_profile_id="profile-1",
+            manual_compensation_ms=0.5,
         ),
     )
 

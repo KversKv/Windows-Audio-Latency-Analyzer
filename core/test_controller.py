@@ -18,6 +18,7 @@ from audio.stream_common import AudioStreamError
 from core.device_service import DeviceService
 from core.latency_analyzer import LatencyAnalyzer, LatencyMeasurement
 from core.offline_simulation import OfflineLatencySimulator
+from core.statistics_engine import SessionStatistics, StatisticsEngine
 from core.test_models import MeasurementRecord, TestSessionConfig, TestSessionSnapshot
 from core.test_state_machine import TestState, TestStateMachine
 
@@ -510,6 +511,7 @@ class TestController(QObject):
         self._worker: TestSessionWorker | None = None
         self._records: list[MeasurementRecord] = []
         self._snapshot: TestSessionSnapshot | None = None
+        self._session_config: TestSessionConfig | None = None
 
     @property
     def state(self) -> TestState:
@@ -528,10 +530,23 @@ class TestController(QObject):
     def snapshot(self) -> TestSessionSnapshot | None:
         return self._snapshot
 
+    @property
+    def statistics(self) -> SessionStatistics:
+        minimum_valid_count = (
+            self._session_config.measurement.minimum_valid_count
+            if self._session_config is not None
+            else 1
+        )
+        return StatisticsEngine.calculate(
+            (record.measurement for record in self._records),
+            minimum_valid_count=minimum_valid_count,
+        )
+
     def start(self, config: TestSessionConfig) -> None:
         if self.is_running:
             raise ControllerBusyError("测试仍在运行或正在收尾")
         self._reset_session()
+        self._session_config = config
         self._transition(TestState.DEVICE_CHECK)
 
         thread = QThread(self)
@@ -611,6 +626,7 @@ class TestController(QObject):
             self._transition(TestState.IDLE)
         self._records.clear()
         self._snapshot = None
+        self._session_config = None
         self.progress_changed.emit(0, 0)
         self.session_cleared.emit()
 
