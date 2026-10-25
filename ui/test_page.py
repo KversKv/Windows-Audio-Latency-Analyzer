@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QProgressBar,
     QPushButton,
     QSizePolicy,
@@ -263,6 +264,28 @@ class TestPage(QWidget):
         self.calibration_source_label.setWordWrap(True)
         parameter_layout.addWidget(self.calibration_source_label, 5, 0, 1, 5)
 
+        headphone_label = QLabel("耳机名称")
+        headphone_label.setObjectName("fieldLabel")
+        parameter_layout.addWidget(headphone_label, 6, 0)
+        self.headphone_name_edit = QLineEdit()
+        self.headphone_name_edit.setPlaceholderText("用于历史记录搜索，例如：WH-1000XM5")
+        self.headphone_name_edit.setClearButtonEnabled(True)
+        parameter_layout.addWidget(self.headphone_name_edit, 7, 0, 1, 2)
+        connection_label = QLabel("连接方式")
+        connection_label.setObjectName("fieldLabel")
+        parameter_layout.addWidget(connection_label, 6, 2)
+        self.connection_type_combo = QComboBox()
+        for text, value in (
+            ("未知 / 未指定", "unknown"),
+            ("有线", "wired"),
+            ("USB", "usb"),
+            ("2.4 GHz 无线", "2.4ghz"),
+            ("蓝牙", "bluetooth"),
+            ("其他", "other"),
+        ):
+            self.connection_type_combo.addItem(text, value)
+        parameter_layout.addWidget(self.connection_type_combo, 7, 2, 1, 2)
+
         self._parameter_widgets = [
             self.test_count_spin,
             self.minimum_valid_count_spin,
@@ -271,6 +294,8 @@ class TestPage(QWidget):
             self.calibration_profile_combo,
             self.amplitude_spin,
             self.simulation_delay_spin,
+            self.headphone_name_edit,
+            self.connection_type_combo,
         ]
         root_layout.addWidget(parameter_card)
 
@@ -384,7 +409,7 @@ class TestPage(QWidget):
         self.stop_button = QPushButton("停止")
         self.clear_button = QPushButton("清空当前会话")
         self.save_button = QPushButton("保存会话")
-        self.save_button.setToolTip("生成完整会话保存请求；SQLite 持久化将在后续阶段接入")
+        self.save_button.setToolTip("将完整会话和全部单次原始结果保存到 SQLite")
         for button in (self.start_button, self.stop_button, self.clear_button, self.save_button):
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             controls.addWidget(button)
@@ -481,6 +506,8 @@ class TestPage(QWidget):
             calibration_profile=profile,
             output_device_name=context.output_device,
             input_device_name=context.input_device,
+            headphone_name=self.headphone_name_edit.text().strip(),
+            connection_type=self.connection_type_combo.currentData(),
         )
 
     def update_config(self, config: AppConfig) -> None:
@@ -872,7 +899,8 @@ class TestPage(QWidget):
         self._update_controls()
 
     def _on_save_requested(self, snapshot: TestSessionSnapshot) -> None:
-        self.session_status_label.setText("保存请求已生成；SQLite 持久化尚未接入，当前仍未写入数据库")
+        self.session_status_label.setText("正在后台保存会话和全部单次结果到 SQLite…")
+        self._update_controls()
         self.session_save_requested.emit(snapshot)
 
     def _on_session_saved(self, _snapshot: TestSessionSnapshot) -> None:
@@ -907,15 +935,25 @@ class TestPage(QWidget):
         refreshing = self._refresh_thread is not None and self._refresh_thread.isRunning()
         has_output = self.output_combo.count() > 0 and self.selected_output_device_id() is not None
         has_input = self.input_combo.count() > 0 and self.selected_input_device_id() is not None
-        can_start = has_output and has_input and not active and not refreshing and not self._shutting_down
+        can_start = (
+            has_output
+            and has_input
+            and not active
+            and not refreshing
+            and not self.controller.save_pending
+            and not self._shutting_down
+        )
         self.start_button.setEnabled(can_start)
         self.stop_button.setEnabled(active and not self._stop_requested)
         self.clear_button.setEnabled(
-            not active and (bool(self.controller.records) or self.controller.state != TestState.IDLE)
+            not active
+            and not self.controller.save_pending
+            and (bool(self.controller.records) or self.controller.state != TestState.IDLE)
         )
         snapshot = self.controller.snapshot
         self.save_button.setEnabled(
             not active
+            and not self.controller.save_pending
             and self.controller.state in {TestState.COMPLETED, TestState.USER_STOPPED}
             and snapshot is not None
             and bool(snapshot.records)

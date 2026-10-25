@@ -512,6 +512,7 @@ class TestController(QObject):
         self._records: list[MeasurementRecord] = []
         self._snapshot: TestSessionSnapshot | None = None
         self._session_config: TestSessionConfig | None = None
+        self._save_pending = False
 
     @property
     def state(self) -> TestState:
@@ -521,6 +522,10 @@ class TestController(QObject):
     def is_running(self) -> bool:
         thread_running = self._thread is not None and self._thread.isRunning()
         return self._state_machine.is_active or thread_running
+
+    @property
+    def save_pending(self) -> bool:
+        return self._save_pending
 
     @property
     def records(self) -> tuple[MeasurementRecord, ...]:
@@ -583,11 +588,15 @@ class TestController(QObject):
             raise SessionNotAvailableError("当前没有可保存的已完成测量")
         if self.state not in {TestState.COMPLETED, TestState.USER_STOPPED}:
             raise SessionNotAvailableError("当前会话已保存或处于不可保存状态")
+        if self._save_pending:
+            return
+        self._save_pending = True
         self.session_save_requested.emit(self._snapshot)
 
     def mark_saved(self) -> None:
         if self._snapshot is None:
             raise SessionNotAvailableError("当前没有会话")
+        self._save_pending = False
         if self.state == TestState.SAVED:
             return
         self._transition(TestState.SAVED)
@@ -595,6 +604,7 @@ class TestController(QObject):
         self.session_saved.emit(self._snapshot)
 
     def notify_save_failed(self, message: str) -> None:
+        self._save_pending = False
         self.save_failed.emit(message)
 
     def shutdown(self, timeout_ms: int = 3000) -> bool:
@@ -627,6 +637,7 @@ class TestController(QObject):
         self._records.clear()
         self._snapshot = None
         self._session_config = None
+        self._save_pending = False
         self.progress_changed.emit(0, 0)
         self.session_cleared.emit()
 

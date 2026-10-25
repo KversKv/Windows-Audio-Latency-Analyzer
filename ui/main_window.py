@@ -19,6 +19,9 @@ from app.config import AppConfig, CalibrationConfig, CalibrationProfile, ConfigM
 from core.calibration_manager import CalibrationManager
 from core.config_worker import ConfigSaveWorker
 from core.device_service import DeviceInventory, DeviceService
+from core.persistence_controller import PersistenceController
+from core.persistence_service import PersistenceService
+from core.test_models import TestSessionSnapshot
 from ui.comparison_page import ComparisonPage
 from ui.history_page import HistoryPage
 from ui.settings_page import SettingsPage
@@ -36,11 +39,17 @@ class MainWindow(QMainWindow):
         device_service: DeviceService,
         config_manager: ConfigManager,
         config: AppConfig,
+        persistence_controller: PersistenceController | None = None,
     ) -> None:
         super().__init__()
         self._config_manager = config_manager
         self._config = config
         self._pending_config: AppConfig | None = None
+        self._pending_save_snapshot: TestSessionSnapshot | None = None
+        self._persistence_controller = persistence_controller or PersistenceController(
+            PersistenceService(config_manager.path.with_name("latency_analyzer.db")),
+            self,
+        )
         self._config_save_thread: QThread | None = None
         self._config_save_worker: ConfigSaveWorker | None = None
         self._shutting_down = False
@@ -69,6 +78,8 @@ class MainWindow(QMainWindow):
         self.test_page.audio_parameters_changed.connect(self._on_audio_parameters_changed)
         self.test_page.status_message.connect(self._on_test_status)
         self.test_page.session_save_requested.connect(self._on_session_save_requested)
+        self._persistence_controller.session_saved.connect(self._on_session_saved)
+        self._persistence_controller.save_failed.connect(self._on_session_save_failed)
         self.configuration_saved.connect(self.test_page.update_config)
         self.configuration_saved.connect(self.settings_page.update_config)
         self.settings_page.save_requested.connect(self._save_settings)
@@ -76,6 +87,7 @@ class MainWindow(QMainWindow):
             self._on_calibration_profile_save_requested
         )
         QTimer.singleShot(0, self.test_page.refresh_devices)
+        QTimer.singleShot(0, self.history_page.refresh)
 
     def _build_ui(self, device_service: DeviceService, config: AppConfig) -> None:
         central_widget = QWidget()
@@ -121,7 +133,7 @@ class MainWindow(QMainWindow):
 
         self.page_stack = QStackedWidget()
         self.test_page = TestPage(device_service, config)
-        self.history_page = HistoryPage()
+        self.history_page = HistoryPage(self._persistence_controller)
         self.comparison_page = ComparisonPage()
         self.settings_page = SettingsPage(config)
         for page in (self.test_page, self.history_page, self.comparison_page, self.settings_page):
@@ -134,6 +146,8 @@ class MainWindow(QMainWindow):
             raise IndexError(f"无效页面索引：{index}")
         self.page_stack.setCurrentIndex(index)
         self.navigation_buttons[index].setChecked(True)
+        if index == 1:
+            self.history_page.refresh()
 
     def current_config(self) -> AppConfig:
         return self._pending_config or self._config
@@ -161,11 +175,22 @@ class MainWindow(QMainWindow):
     def _on_test_status(self, message: str) -> None:
         self.statusBar().showMessage(message, 6000)
 
-    def _on_session_save_requested(self, _snapshot: object) -> None:
-        self.statusBar().showMessage(
-            "会话快照已准备；SQLite 持久化尚未接入，当前未写入数据库",
-            8000,
-        )
+    def _on_session_save_requested(self, snapshot: TestSessionSnapshot) -> None:
+        if self._shutting_down:
+            return
+        self._pending_save_snapshot = snapshot
+        self._persistence_controller.save_session(snapshot)
+
+    def _on_session_saved(self, snapshot: TestSessionSnapshot) -> None:
+        self._pending_save_snapshot = None
+        self.test_page.controller.mark_saved()
+        self.history_page.refresh()
+        self.statusBar().showMessage("会话及全部单次结果已保存到 SQLite", 6000)
+
+    def _on_session_save_failed(self, message: str) -> None:
+        self._pending_save_snapshot = None
+        self.test_page.controller.notify_save_failed(message)
+        self.statusBar().showMessage(f"会话保存失败：{message}", 8000)
 
     def _on_device_selection_changed(self) -> None:
         self._config = replace(
@@ -249,6 +274,7 @@ class MainWindow(QMainWindow):
             return
         self._shutting_down = True
         self.test_page.shutdown()
+        self._persistence_controller.shutdown()
         thread = self._config_save_thread
         if thread is not None and thread.isRunning():
             thread.quit()

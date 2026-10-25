@@ -10,6 +10,7 @@ from app.config import AppConfig, AudioConfig, ConfigManager
 from audio.audio_backend import SimulatedAudioBackend
 from audio.audio_device_manager import AudioDeviceManager
 from core.device_service import DeviceService
+from core.persistence_service import PersistenceService
 from core.test_state_machine import TestState as SessionState
 from ui.main_window import MainWindow
 
@@ -134,7 +135,7 @@ def test_calibration_profile_save_and_selection(main_window):
 
 
 def test_simulated_measurement_page_workflow(main_window):
-    window, _ = main_window
+    window, config_manager = main_window
     window.show()
     assert _wait_for_signal(window.test_page.refresh_finished) is True
     page = window.test_page
@@ -190,7 +191,26 @@ def test_simulated_measurement_page_workflow(main_window):
     page.save_button.click()
     assert len(save_requests) == 1
     assert save_requests[0].completed_count == 2
-    assert "未写入数据库" in page.session_status_label.text()
+    assert page.controller.save_pending is True
+    assert page.clear_button.isEnabled() is False
+    assert _wait_for_signal(page.controller.session_saved) is True
+    assert page.controller.state == SessionState.SAVED
+    assert page.controller.save_pending is False
+    assert page.session_status_label.text() == "会话已保存"
+
+    database_path = config_manager.path.with_name("latency_analyzer.db")
+    reopened_service = PersistenceService(database_path)
+    sessions = reopened_service.list_sessions()
+    assert len(sessions) == 1
+    stored = reopened_service.get_session(sessions[0].id)
+    assert stored.session_uid == save_requests[0].session_id
+    assert stored.completed_count == stored.valid_count == 2
+    assert stored.invalid_count == 0
+    assert stored.is_simulation is True
+    assert len(stored.results) == 2
+    assert reopened_service.recalculate_statistics(stored).raw.mean_latency_ms == pytest.approx(
+        statistics.raw.mean_latency_ms
+    )
 
     page.clear_button.click()
     assert page.controller.state == SessionState.IDLE

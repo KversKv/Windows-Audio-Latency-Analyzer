@@ -1,6 +1,7 @@
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import numpy as np
 
@@ -19,8 +20,17 @@ class TestSessionConfig:
     output_device_name: str = ""
     input_device_name: str = ""
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    session_id: str = field(default_factory=lambda: uuid4().hex)
+    session_name: str = ""
+    headphone_name: str = ""
+    connection_type: str = "unknown"
+    notes: str = ""
 
     def __post_init__(self) -> None:
+        if not self.session_id.strip():
+            raise ValueError("会话 ID 不能为空")
+        if self.connection_type not in {"unknown", "wired", "usb", "2.4ghz", "bluetooth", "other"}:
+            raise ValueError("不支持的连接方式")
         if not math.isfinite(self.compensation_ms):
             raise ValueError("补偿值必须为有限数值")
         if self.started_at.tzinfo is None or self.started_at.utcoffset() is None:
@@ -85,6 +95,10 @@ class TestSessionSnapshot:
     def __post_init__(self) -> None:
         if self.finished_at.tzinfo is None or self.finished_at.utcoffset() is None:
             raise ValueError("会话结束时间必须包含时区")
+
+    @property
+    def session_id(self) -> str:
+        return self.config.session_id
 
     @property
     def completed_count(self) -> int:

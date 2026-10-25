@@ -10,4 +10,6 @@
 - `LatencyAnalyzer` 在分析线程执行归一化局部互相关；无效结果返回 `LatencyMeasurement.invalid_reason`，超范围延迟保留原值，不得改成静默丢弃。
 - `StatisticsEngine` 仅聚合有效测量且保留无效原因计数；`CalibrationManager` 只使用显式补偿值，所选配置必须严格匹配设备、采样率和音频模式。
 - `OfflineLatencySimulator` 只生成明确标记 `is_simulation` 的合成分析；真实与模拟结果均须保留 `timing_basis` 和 `timing_limitations`。
-- 修改线程协议后验证 `tests/test_main_window.py`；流程专题 @see docs/ai/07_FLOW_GUIDE.md、docs/ai/04_ARCHITECTURE.md。
+- `PersistenceService` 是 core → data 的持久化外观，负责会话快照映射和明细统计重算；UI 只能经 `PersistenceController` 的串行 QThread 调用，禁止直接访问仓储。
+- `TestSessionConfig.session_id` 从测试开始到保存保持稳定，用于数据库防重复写入；保存 pending 期间不得替换或清空当前快照。
+- 修改线程协议后验证 `tests/test_main_window.py`，修改持久化协议后同时验证 `tests/test_persistence.py`；流程专题 @see docs/ai/07_FLOW_GUIDE.md、docs/ai/04_ARCHITECTURE.md。

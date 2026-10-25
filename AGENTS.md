@@ -77,7 +77,7 @@ main.py → ui/ ←→ core/ → audio/ → sounddevice / PortAudio
 | `ui/styles/` | 深色主题 QSS / 样式 | 继承 `ui/AGENTS.md` | 01_CONVENTIONS |
 | `core/` | 测试编排 / 状态机 / 延迟分析 / 统计 / 校准 | [AGENTS.md](./core/AGENTS.md) | 07_FLOW_GUIDE · 04_ARCHITECTURE |
 | `audio/` | 设备管理 / 连续播放 / 采集 / 同步 / 激励生成 | [AGENTS.md](./audio/AGENTS.md) | 05_AUDIO_GUIDE · 04_ARCHITECTURE |
-| `data/` | SQLite / repository / 导出 | 按需，实施时创建 | 04_ARCHITECTURE · 01_CONVENTIONS |
+| `data/` | SQLite / repository / 导出 | [AGENTS.md](./data/AGENTS.md) | 04_ARCHITECTURE · 01_CONVENTIONS |
 | `app/` | 应用组装 / 配置管理 | [AGENTS.md](./app/AGENTS.md) | 00_OVERVIEW · 01_CONVENTIONS |
 | `tests/` | 单元测试 / 合成信号用例 | [AGENTS.md](./tests/AGENTS.md) | 09_WORKFLOW · 03_GOTCHAS |
 | 根目录/全局 | 入口、版本、环境、跨模块 | 本文件 | 见分发表 |
@@ -140,6 +140,7 @@ python -m PyInstaller spec/latency_analyzer.spec --clean --noconfirm   # spec/ �
 3. **不要用各类通用尾部模板**（同名方法尾行 / `def close` / `return ...`）单独做锚点。
 4. 每次编辑后**立即复核结构**：`Grep -n "^class |def <特征方法>"`，确认目标落在 EOF 且相邻结构未被劈裂。
 5. 误插入后先精确删除误插块、恢复原结构，再以唯一锚点重新追加。
+6. 重要的debug代码可以保留;
 
 ### 附：PowerShell 命令注意（Windows 项目）
 
