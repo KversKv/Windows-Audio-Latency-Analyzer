@@ -80,6 +80,7 @@ main.py → ui/ ←→ core/ → audio/ → sounddevice / PortAudio
 | `data/` | SQLite / repository / 导出 | [AGENTS.md](./data/AGENTS.md) | 04_ARCHITECTURE · 01_CONVENTIONS |
 | `app/` | 应用组装 / 配置管理 | [AGENTS.md](./app/AGENTS.md) | 00_OVERVIEW · 01_CONVENTIONS |
 | `tests/` | 单元测试 / 合成信号用例 | [AGENTS.md](./tests/AGENTS.md) | 09_WORKFLOW · 03_GOTCHAS |
+| `spec/` | PyInstaller onedir 配置与运行时资源清单 | 继承根约定 | 03_GOTCHAS · 08_CHECKLISTS · 02_COMMANDS |
 | 根目录/全局 | 入口、版本、环境、跨模块 | 本文件 | 见分发表 |
 
 ---
@@ -93,7 +94,7 @@ main.py → ui/ ←→ core/ → audio/ → sounddevice / PortAudio
 pip install -r requirements.txt
 python main.py
 python -m pytest tests/
-python -m PyInstaller spec/latency_analyzer.spec --clean --noconfirm   # spec/ 随 Phase 6 建立
+python -m PyInstaller spec/latency_analyzer.spec --clean --noconfirm   # onedir 交付包
 ```
 
 更多命令见 [docs/ai/02_COMMANDS.md](./docs/ai/02_COMMANDS.md)。

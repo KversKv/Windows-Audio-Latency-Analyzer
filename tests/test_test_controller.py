@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication
 from app.config import AudioConfig, CalibrationContext, MeasurementConfig
 from audio.audio_backend import (
     AudioBackend,
+    AudioBackendError,
     AudioCallbackTime,
     AudioDevice,
     AudioStream,
@@ -228,6 +229,11 @@ class _FakeDuplexBackend(AudioBackend):
         self.input_callbacks += 1
 
 
+class _FailingInputBackend(_FakeDuplexBackend):
+    def open_input_stream(self, **kwargs):
+        raise AudioBackendError("模拟录音设备打开失败")
+
+
 def test_simulated_controller_completes_and_preserves_compensation(controller_factory):
     controller = controller_factory(_simulated_service())
     states = []
@@ -439,3 +445,41 @@ def test_disconnected_device_fails_without_opening_stream(controller_factory):
     assert controller.state == SessionState.DEVICE_ERROR
     assert controller.records == ()
     assert any("播放设备不可用" in error for error in errors)
+
+
+def test_input_open_failure_closes_already_opened_output(controller_factory):
+    backend = _FailingInputBackend()
+    controller = controller_factory(DeviceService(AudioDeviceManager(backend)))
+    errors = []
+    controller.error_occurred.connect(errors.append)
+
+    controller.start(_session_config(backend="sounddevice", test_count=1))
+
+    assert _wait_for_signal(controller.finished) is True
+    assert controller.state == SessionState.AUDIO_STREAM_ERROR
+    assert backend.output_stream is not None and backend.output_stream.is_closed
+    assert backend.input_stream is None
+    assert any("模拟录音设备打开失败" in error for error in errors)
+
+
+def test_unexpected_output_stop_closes_resources(controller_factory):
+    backend = _FakeDuplexBackend()
+    controller = controller_factory(DeviceService(AudioDeviceManager(backend)))
+    errors = []
+    controller.error_occurred.connect(errors.append)
+    timer = QTimer()
+    timer.setInterval(5)
+    timer.timeout.connect(backend.pump)
+    timer.start()
+    try:
+        controller.start(_session_config(backend="sounddevice", test_count=100, max_latency_ms=50.0))
+        assert _wait_for_signal(controller.measurement_ready, 10000) is True
+        backend.output_stream.stop()
+        assert _wait_for_signal(controller.finished, 10000) is True
+    finally:
+        timer.stop()
+
+    assert controller.state == SessionState.AUDIO_STREAM_ERROR
+    assert 1 <= len(controller.records) < 100
+    assert backend.output_stream.is_closed and backend.input_stream.is_closed
+    assert any("播放流已意外停止" in error for error in errors)
