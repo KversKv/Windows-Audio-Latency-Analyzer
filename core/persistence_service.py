@@ -1,5 +1,5 @@
 import json
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -15,6 +15,12 @@ from data.models import CalibrationProfile as StoredCalibrationProfile
 from data.models import TestResult as StoredTestResult
 from data.models import TestSession as StoredTestSession
 from data.repository import SessionRepository
+
+
+@dataclass(frozen=True, slots=True)
+class SessionComparison:
+    session: StoredTestSession
+    statistics: SessionStatistics
 
 
 class PersistenceService:
@@ -39,6 +45,22 @@ class PersistenceService:
 
     def get_session(self, session_id: int) -> StoredTestSession:
         return self._repository().get_session(session_id)
+
+    def load_comparison_sessions(
+        self,
+        session_ids: Iterable[int],
+    ) -> tuple[SessionComparison, ...]:
+        repository = self._repository()
+        comparisons = []
+        for session_id in session_ids:
+            session = repository.get_session(session_id)
+            comparisons.append(
+                SessionComparison(
+                    session=session,
+                    statistics=self.recalculate_statistics(session),
+                )
+            )
+        return tuple(comparisons)
 
     def update_notes(self, session_id: int, notes: str) -> None:
         self._repository().update_notes(session_id, notes)

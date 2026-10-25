@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 class PersistenceWorker(QObject):
     sessions_loaded = Signal(object)
     session_loaded = Signal(object)
+    comparison_session_list_loaded = Signal(object)
+    comparison_sessions_loaded = Signal(object)
     session_saved = Signal(object)
     notes_saved = Signal(int)
     sessions_deleted = Signal(int)
@@ -51,6 +53,23 @@ class PersistenceWorker(QObject):
             "load_session",
             lambda: self._service.get_session(session_id),
             self.session_loaded.emit,
+        )
+
+    @Slot()
+    def load_comparison_session_list(self) -> None:
+        self._execute(
+            "load_comparison_session_list",
+            lambda: self._service.list_sessions(sort_by="created_at_desc"),
+            self.comparison_session_list_loaded.emit,
+        )
+
+    @Slot(object)
+    def load_comparison_sessions(self, session_ids: object) -> None:
+        ids = tuple(session_ids)
+        self._execute(
+            "load_comparison_sessions",
+            lambda: self._service.load_comparison_sessions(ids),
+            self.comparison_sessions_loaded.emit,
         )
 
     @Slot(int, str)
@@ -103,6 +122,8 @@ class PersistenceWorker(QObject):
 class PersistenceController(QObject):
     sessions_loaded = Signal(object)
     session_loaded = Signal(object)
+    comparison_session_list_loaded = Signal(object)
+    comparison_sessions_loaded = Signal(object)
     session_saved = Signal(object)
     notes_saved = Signal(int)
     sessions_deleted = Signal(int)
@@ -115,6 +136,8 @@ class PersistenceController(QObject):
     _save_requested = Signal(object)
     _load_sessions_requested = Signal(str, str, str)
     _load_session_requested = Signal(int)
+    _load_comparison_list_requested = Signal()
+    _load_comparison_requested = Signal(object)
     _update_notes_requested = Signal(int, str)
     _delete_requested = Signal(object)
     _export_requested = Signal(object, object, str)
@@ -128,11 +151,15 @@ class PersistenceController(QObject):
         self._save_requested.connect(self._worker.save_session)
         self._load_sessions_requested.connect(self._worker.load_sessions)
         self._load_session_requested.connect(self._worker.load_session)
+        self._load_comparison_list_requested.connect(self._worker.load_comparison_session_list)
+        self._load_comparison_requested.connect(self._worker.load_comparison_sessions)
         self._update_notes_requested.connect(self._worker.update_notes)
         self._delete_requested.connect(self._worker.delete_sessions)
         self._export_requested.connect(self._worker.export_sessions)
         self._worker.sessions_loaded.connect(self.sessions_loaded)
         self._worker.session_loaded.connect(self.session_loaded)
+        self._worker.comparison_session_list_loaded.connect(self.comparison_session_list_loaded)
+        self._worker.comparison_sessions_loaded.connect(self.comparison_sessions_loaded)
         self._worker.session_saved.connect(self.session_saved)
         self._worker.notes_saved.connect(self.notes_saved)
         self._worker.sessions_deleted.connect(self.sessions_deleted)
@@ -159,6 +186,14 @@ class PersistenceController(QObject):
     def load_session(self, session_id: int) -> None:
         if self._accept("load_session"):
             self._load_session_requested.emit(session_id)
+
+    def load_comparison_session_list(self) -> None:
+        if self._accept("load_comparison_session_list"):
+            self._load_comparison_list_requested.emit()
+
+    def load_comparison_sessions(self, session_ids: Iterable[int]) -> None:
+        if self._accept("load_comparison_sessions"):
+            self._load_comparison_requested.emit(tuple(session_ids))
 
     def update_notes(self, session_id: int, notes: str) -> None:
         if self._accept("update_notes"):

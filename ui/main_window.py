@@ -134,7 +134,7 @@ class MainWindow(QMainWindow):
         self.page_stack = QStackedWidget()
         self.test_page = TestPage(device_service, config)
         self.history_page = HistoryPage(self._persistence_controller)
-        self.comparison_page = ComparisonPage()
+        self.comparison_page = ComparisonPage(self._persistence_controller)
         self.settings_page = SettingsPage(config)
         for page in (self.test_page, self.history_page, self.comparison_page, self.settings_page):
             self.page_stack.addWidget(page)
@@ -148,6 +148,8 @@ class MainWindow(QMainWindow):
         self.navigation_buttons[index].setChecked(True)
         if index == 1:
             self.history_page.refresh()
+        elif index == 2:
+            self.comparison_page.refresh()
 
     def current_config(self) -> AppConfig:
         return self._pending_config or self._config
