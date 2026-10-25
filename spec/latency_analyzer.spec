@@ -1,5 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+
+#python -m PyInstaller spec/latency_analyzer.spec --clean --noconfirm
+
+
+
+
 from pathlib import Path
 
 
