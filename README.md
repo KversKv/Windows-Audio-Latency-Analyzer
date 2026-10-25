@@ -2,7 +2,11 @@
 
 基于 Python 3.12 + PySide6 + sounddevice/PortAudio + NumPy/SciPy 的 Windows 桌面应用：在连续音频流中插入 Chirp 激励，用外接有线麦克风采集声学响应并做互相关分析，测量耳机（有线 / USB / 2.4G / 蓝牙）的端到端延迟。结果持久化于 SQLite，支持历史查询、多会话对比与 CSV/Excel 导出。
 
-## 核心特性
+## 当前状态
+
+P0（项目骨架与 UI 基础）已完成：应用可启动，提供测试、历史、对比、设置四个页面，支持播放/录音设备独立枚举与刷新、离线模拟设备和 JSON 配置保存。连续播放/采集、延迟分析、数据库与图表将在 P1 及后续阶段接入。
+
+## 目标特性
 
 - 连续流测量：播放流在整个测量会话期间保持打开，避免把蓝牙"冷启动"延迟计入结果
 - Chirp 激励 + 滑动互相关 + 亚采样峰值插值，抗背景噪声与麦克风增益变化
@@ -26,16 +30,19 @@
 ## 项目结构
 
 ```
-├── main.py             # 入口
-├── app/                # 应用组装 / 配置管理
+├── main.py             # 入口，仅调用应用组装层
+├── requirements.txt    # 项目与测试依赖
+├── version.py          # 版本号唯一事实源
+├── log_config.py       # 日志配置
+├── app/                # 应用组装 / JSON 配置管理
 ├── ui/                 # 四大功能页（测试 / 历史 / 对比 / 设置）+ 主窗口
 │   ├── widgets/        # 通用控件
 │   └── styles/         # 深色主题 QSS
-├── core/               # 测试编排 / 状态机 / 延迟分析 / 统计 / 校准
-├── audio/              # 设备管理 / 连续播放 / 采集 / 同步 / 激励生成
-├── data/               # SQLite / repository / 导出
-├── tests/              # 单元测试 / 合成信号用例
-├── logs/               # 运行日志（不入库）
+├── core/               # UI 工作线程封装；后续接入测试编排与分析
+├── audio/              # 后端抽象 / 设备管理；后续接入连续播放与采集
+├── data/               # SQLite / repository / 导出（后续阶段）
+├── tests/              # 单元测试 / 启动与 UI 验证
+├── logs/               # 本地日志目录（不入库）
 └── docs/ai/            # AI 协作深度文档
 ```
 
@@ -55,6 +62,14 @@ pip install -r requirements.txt
 ```powershell
 python main.py
 ```
+
+无物理音频设备时，可明确以模拟模式检查界面：
+
+```powershell
+python main.py --simulate
+```
+
+默认配置写入 `%APPDATA%\WindowsAudioLatencyAnalyzer\config.json`，运行日志写入同目录的 `logs/`。测试或便携运行可通过 `LATENCY_ANALYZER_CONFIG_DIR` 环境变量指定独立配置目录。后端设置在下次启动后生效。
 
 ## 测试
 

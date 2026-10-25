@@ -1,0 +1,52 @@
+from audio import audio_backend as backend_module
+from audio.audio_backend import SimulatedAudioBackend, SoundDeviceBackend
+from audio.audio_device_manager import AudioDeviceManager
+
+
+def test_simulated_backend_has_independent_devices():
+    manager = AudioDeviceManager(SimulatedAudioBackend(sample_rate=44100))
+
+    inventory = manager.scan()
+
+    assert inventory.is_simulation is True
+    assert len(inventory.output_devices) == 1
+    assert len(inventory.input_devices) == 1
+    assert inventory.output_devices[0].identifier != inventory.input_devices[0].identifier
+    assert inventory.output_devices[0].default_sample_rate == 44100
+
+
+def test_sounddevice_backend_prefers_wasapi_on_windows(monkeypatch):
+    host_apis = [{"name": "Windows WASAPI"}, {"name": "MME"}]
+    raw_devices = [
+        {
+            "name": "WASAPI 耳机",
+            "hostapi": 0,
+            "max_input_channels": 0,
+            "max_output_channels": 2,
+            "default_samplerate": 48000.0,
+        },
+        {
+            "name": "WASAPI 麦克风",
+            "hostapi": 0,
+            "max_input_channels": 2,
+            "max_output_channels": 0,
+            "default_samplerate": 44100.0,
+        },
+        {
+            "name": "MME 重复设备",
+            "hostapi": 1,
+            "max_input_channels": 0,
+            "max_output_channels": 2,
+            "default_samplerate": 48000.0,
+        },
+    ]
+    monkeypatch.setattr(backend_module.sd, "query_devices", lambda: raw_devices)
+    monkeypatch.setattr(backend_module.sd, "query_hostapis", lambda: host_apis)
+    monkeypatch.setattr(backend_module.os, "name", "nt")
+
+    inventory = AudioDeviceManager(SoundDeviceBackend()).scan()
+
+    assert len(inventory.output_devices) == 1
+    assert len(inventory.input_devices) == 1
+    assert inventory.output_devices[0].name == "WASAPI 耳机"
+    assert inventory.input_devices[0].identifier == 1

@@ -68,18 +68,18 @@ main.py → ui/ ←→ core/ → audio/ → sounddevice / PortAudio
 
 ## 5. 子模块地图（路由用 · 定位任务落在哪）
 
-> 判定任务子模块路径后，优先读对应目录的 `AGENTS.md`（若存在）。带 ✅ 者应优先建/维护局部 AGENTS.md。
+> 判定任务子模块路径后，必须就近读取已存在的局部 `AGENTS.md`；未建文件的目录继承最近上层约定。
 
 | 子模块路径 | 职责 | 局部 AGENTS.md | 深度专题 @see |
 |---|---|---|---|
-| `ui/`（test / history / comparison / settings 页 + 主窗口） | 四大功能页 | ✅ 按需铺开页级 | 06_PAGE_GUIDE · 01_CONVENTIONS |
-| `ui/widgets/` | 通用控件 | 按需 | 01_CONVENTIONS · 03_GOTCHAS |
-| `ui/styles/` | 深色主题 QSS / 样式 | 按需 | 01_CONVENTIONS |
-| `core/` ✅ | 测试编排 / 状态机 / 延迟分析 / 统计 / 校准 | **待建** | 07_FLOW_GUIDE · 04_ARCHITECTURE |
-| `audio/` ✅ | 设备管理 / 连续播放 / 采集 / 同步 / 激励生成 | **待建** | 05_AUDIO_GUIDE · 04_ARCHITECTURE |
-| `data/` | SQLite / repository / 导出 | 按需 | 04_ARCHITECTURE · 01_CONVENTIONS |
-| `app/` | 应用组装 / 配置管理 | 按需 | 00_OVERVIEW · 01_CONVENTIONS |
-| `tests/` | 单元测试 / 合成信号用例 | 按需 | 09_WORKFLOW · 03_GOTCHAS |
+| `ui/`（test / history / comparison / settings 页 + 主窗口） | 四大功能页 | [AGENTS.md](./ui/AGENTS.md)，页级按需 | 06_PAGE_GUIDE · 01_CONVENTIONS |
+| `ui/widgets/` | 通用控件 | 继承 `ui/AGENTS.md`，独立约定按需 | 01_CONVENTIONS · 03_GOTCHAS |
+| `ui/styles/` | 深色主题 QSS / 样式 | 继承 `ui/AGENTS.md` | 01_CONVENTIONS |
+| `core/` | 测试编排 / 状态机 / 延迟分析 / 统计 / 校准 | [AGENTS.md](./core/AGENTS.md) | 07_FLOW_GUIDE · 04_ARCHITECTURE |
+| `audio/` | 设备管理 / 连续播放 / 采集 / 同步 / 激励生成 | [AGENTS.md](./audio/AGENTS.md) | 05_AUDIO_GUIDE · 04_ARCHITECTURE |
+| `data/` | SQLite / repository / 导出 | 按需，实施时创建 | 04_ARCHITECTURE · 01_CONVENTIONS |
+| `app/` | 应用组装 / 配置管理 | [AGENTS.md](./app/AGENTS.md) | 00_OVERVIEW · 01_CONVENTIONS |
+| `tests/` | 单元测试 / 合成信号用例 | [AGENTS.md](./tests/AGENTS.md) | 09_WORKFLOW · 03_GOTCHAS |
 | 根目录/全局 | 入口、版本、环境、跨模块 | 本文件 | 见分发表 |
 
 ---
