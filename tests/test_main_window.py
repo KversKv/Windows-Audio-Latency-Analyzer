@@ -92,6 +92,25 @@ def test_long_pages_scroll_without_compressing_content(main_window, qt_applicati
         assert content.height() > scroll_area.viewport().height()
         assert scroll_area.verticalScrollBar().maximum() > 0
 
+        if page is window.test_page:
+            fixed_controls = (
+                page.state_label,
+                page.progress_bar,
+                page.session_status_label,
+                page.start_button,
+                page.stop_button,
+                page.clear_button,
+                page.save_button,
+            )
+            scroll_area.verticalScrollBar().setValue(scroll_area.verticalScrollBar().maximum())
+            qt_application.processEvents()
+            assert page.action_footer.parentWidget() is page
+            for control in fixed_controls:
+                assert not content.isAncestorOf(control)
+                assert control.isVisible()
+                assert page.rect().contains(control.mapTo(page, control.rect().center()))
+            continue
+
         scroll_area.ensureWidgetVisible(page.save_button)
         qt_application.processEvents()
         assert scroll_area.verticalScrollBar().value() > 0

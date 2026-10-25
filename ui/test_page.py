@@ -135,7 +135,7 @@ class TestPage(QWidget):
         self.page_scroll_area.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
-        outer_layout.addWidget(self.page_scroll_area)
+        outer_layout.addWidget(self.page_scroll_area, 1)
 
         content = QWidget()
         self.page_scroll_area.setWidget(content)
@@ -395,6 +395,12 @@ class TestPage(QWidget):
         waveform_layout.addWidget(waveform_caption)
         root_layout.addWidget(waveform_panel, 1)
 
+        self.action_footer = QWidget()
+        self.action_footer.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        footer_layout = QVBoxLayout(self.action_footer)
+        footer_layout.setContentsMargins(30, 8, 30, 18)
+        footer_layout.setSpacing(10)
+
         status_layout = QHBoxLayout()
         self.state_label = QLabel("空闲")
         self.state_label.setObjectName("statusBadge")
@@ -409,13 +415,13 @@ class TestPage(QWidget):
         status_layout.addWidget(self.state_label)
         status_layout.addWidget(self.progress_bar)
         status_layout.addWidget(self.session_status_label, 1)
-        root_layout.addLayout(status_layout)
+        footer_layout.addLayout(status_layout)
 
         self.error_label = QLabel()
         self.error_label.setObjectName("errorLabel")
         self.error_label.setWordWrap(True)
         self.error_label.hide()
-        root_layout.addWidget(self.error_label)
+        footer_layout.addWidget(self.error_label)
 
         controls = QHBoxLayout()
         controls.setSpacing(10)
@@ -429,7 +435,8 @@ class TestPage(QWidget):
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             controls.addWidget(button)
         controls.addStretch()
-        root_layout.addLayout(controls)
+        footer_layout.addLayout(controls)
+        outer_layout.addWidget(self.action_footer)
         self._reload_calibration_profiles()
 
     @staticmethod
