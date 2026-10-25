@@ -321,3 +321,21 @@ def test_capture_overflow_preserves_samples_and_reports_error():
     np.testing.assert_array_equal(engine.read_all(), samples)
     assert engine.latest_timing.input_adc_time == pytest.approx(199.9)
     engine.close()
+
+
+def test_capture_metadata_preserves_absolute_read_position():
+    backend = FakeBackend()
+    engine = make_capture(backend)
+    push_input(backend, np.arange(32, dtype=np.float32)[:, np.newaxis])
+
+    first = engine.read_with_metadata(16)
+    second = engine.read_all_with_metadata()
+
+    assert first.start_sample == 0
+    assert first.end_sample == 16
+    assert second.start_sample == 16
+    assert second.end_sample == 32
+    assert first.dropped_frames == second.dropped_frames == 0
+    np.testing.assert_array_equal(first.samples.ravel(), np.arange(16))
+    np.testing.assert_array_equal(second.samples.ravel(), np.arange(16, 32))
+    engine.close()

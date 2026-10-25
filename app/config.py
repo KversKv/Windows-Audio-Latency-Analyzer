@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -46,12 +47,40 @@ class AudioConfig:
 class MeasurementConfig:
     default_test_count: int = 30
     warmup_seconds: float = 3.0
+    stimulus_start_frequency_hz: float = 500.0
+    stimulus_end_frequency_hz: float = 8000.0
+    stimulus_duration_ms: float = 10.0
+    stimulus_window: str = "hann"
+    stimulus_amplitude: float = 0.1
+    min_snr_db: float = 6.0
+    min_correlation: float = 0.35
+    min_latency_ms: float = 0.0
+    max_latency_ms: float = 200.0
 
     def __post_init__(self) -> None:
         if self.default_test_count < 1:
             raise ValueError("默认测试次数必须大于 0")
         if not 1.0 <= self.warmup_seconds <= 15.0:
             raise ValueError("预热时间必须在 1 到 15 秒之间")
+        frequencies = (self.stimulus_start_frequency_hz, self.stimulus_end_frequency_hz)
+        if not all(math.isfinite(value) for value in frequencies):
+            raise ValueError("刺激信号频率必须为有限数值")
+        if not 0 < self.stimulus_start_frequency_hz < self.stimulus_end_frequency_hz:
+            raise ValueError("刺激信号频率必须大于 0 且递增")
+        if not math.isfinite(self.stimulus_duration_ms) or self.stimulus_duration_ms <= 0:
+            raise ValueError("刺激信号时长必须为大于 0 的有限数值")
+        if self.stimulus_window not in {"hann", "none"}:
+            raise ValueError(f"不支持的刺激信号窗函数：{self.stimulus_window}")
+        if not math.isfinite(self.stimulus_amplitude) or not 0 < self.stimulus_amplitude <= 1:
+            raise ValueError("刺激信号幅度必须在 0 到 1 之间")
+        if not math.isfinite(self.min_snr_db):
+            raise ValueError("最低 SNR 必须为有限数值")
+        if not math.isfinite(self.min_correlation) or not 0 < self.min_correlation <= 1:
+            raise ValueError("最低相关系数必须在 0 到 1 之间")
+        if not math.isfinite(self.min_latency_ms) or self.min_latency_ms < 0:
+            raise ValueError("最小有效延迟不能为负数")
+        if not math.isfinite(self.max_latency_ms) or self.max_latency_ms <= self.min_latency_ms:
+            raise ValueError("最大有效延迟必须大于最小有效延迟")
 
 
 @dataclass(frozen=True, slots=True)

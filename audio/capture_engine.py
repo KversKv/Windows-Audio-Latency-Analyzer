@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 import numpy as np
 
 from audio.audio_backend import (
@@ -9,6 +11,19 @@ from audio.audio_backend import (
 )
 from audio.ring_buffer import AudioRingBuffer
 from audio.stream_common import AudioStreamError, StreamTelemetry, StreamTiming
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedAudioBlock:
+    samples: np.ndarray
+    start_sample: int | None
+    dropped_frames: int
+
+    @property
+    def end_sample(self) -> int | None:
+        if self.start_sample is None:
+            return None
+        return self.start_sample + self.samples.shape[0]
 
 
 class CaptureEngine:
@@ -34,6 +49,8 @@ class CaptureEngine:
         self._running = False
         self._closed = False
         self._frames_captured = 0
+        self._frames_read = 0
+        self._read_position_valid = True
         self._callback_count = 0
         self._open_count = 0
         self._start_count = 0
@@ -106,10 +123,26 @@ class CaptureEngine:
         self._start_count += 1
 
     def read(self, frames: int) -> np.ndarray:
-        return self._ring_buffer.read(frames)
+        return self.read_with_metadata(frames).samples
 
     def read_all(self) -> np.ndarray:
-        return self._ring_buffer.read_all()
+        return self.read_all_with_metadata().samples
+
+    def read_with_metadata(self, frames: int) -> CapturedAudioBlock:
+        samples = self._ring_buffer.read(frames)
+        dropped_frames = self._ring_buffer.dropped_frames
+        if dropped_frames:
+            self._read_position_valid = False
+        start_sample = self._frames_read if self._read_position_valid else None
+        self._frames_read += samples.shape[0]
+        return CapturedAudioBlock(
+            samples=samples,
+            start_sample=start_sample,
+            dropped_frames=dropped_frames,
+        )
+
+    def read_all_with_metadata(self) -> CapturedAudioBlock:
+        return self.read_with_metadata(self.available)
 
     def check_health(self) -> None:
         if self._callback_exception is not None:

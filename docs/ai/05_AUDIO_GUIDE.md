@@ -22,4 +22,12 @@ python -m app.audio_diagnostic --list-devices
 python -m app.audio_diagnostic --warmup-seconds 3
 ```
 
-诊断只验证真实播放/采集链路、样本计数、探针调度和时间戳可用性，不计算声学延迟。当前 `SimulatedAudioBackend` 只提供明确标注的虚拟设备，不提供实时流；P2 的合成延迟与离线分析不得冒充真实设备测量。独立设备时钟漂移和完整播放/采集时间映射属于 P2。
+诊断只验证真实播放/采集链路、样本计数、探针调度和时间戳可用性，不计算声学延迟。当前 `SimulatedAudioBackend` 只提供明确标注的虚拟设备，不提供实时流；P2 的合成延迟与离线分析不得冒充真实设备测量。
+
+## P2 已实现接口
+
+- `stimulus_generator.py`：预生成确定性、只读的单声道 Chirp；采样率、频段、时长、窗函数和峰值幅度由调用方从配置注入。
+- `audio_synchronizer.py`：以 DAC/ADC 时间戳和样本索引建立播放/采集映射，支持显式时钟偏移和 ppm 漂移修正。未提供的校准值保持 `None` 并写入限制标记，不自动估计或宣称样本级同步。
+- `CaptureEngine.read_*_with_metadata()`：保留原数组读取接口，同时提供采集块绝对样本起点；丢帧后时间位置不可继续假定连续。
+- `core/latency_analyzer.py`：在局部采集窗口内做归一化滑动互相关、抛物线亚采样插值、幅度/噪声/SNR 与质量判定；结果包含 raw/compensated latency、有效性、无效原因和时间限制。
+- `core/offline_simulation.py`：以已知分数样本延迟、增益和噪声生成离线分析输入，结果及波形明确标记为模拟，不生成实时音频流或真实设备时间戳。

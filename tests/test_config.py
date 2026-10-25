@@ -22,7 +22,19 @@ def test_config_round_trip(tmp_path):
             background_amplitude=0.002,
             capture_buffer_seconds=12.0,
         ),
-        measurement=MeasurementConfig(default_test_count=50, warmup_seconds=5.5),
+        measurement=MeasurementConfig(
+            default_test_count=50,
+            warmup_seconds=5.5,
+            stimulus_start_frequency_hz=600,
+            stimulus_end_frequency_hz=7000,
+            stimulus_duration_ms=12,
+            stimulus_window="none",
+            stimulus_amplitude=0.08,
+            min_snr_db=8,
+            min_correlation=0.4,
+            min_latency_ms=1,
+            max_latency_ms=150,
+        ),
     )
 
     manager.save(expected)

@@ -10,4 +10,7 @@
 - UI 不得直接调用同步枚举；后续回调引擎仍须遵守根文件的连续流、warm-up 与回调线程红线。
 - `open_output_stream()` / `open_input_stream()` 统一返回 `AudioStream`；回调只接收后端映射后的时间戳与状态，引擎不得反向导入 sounddevice。
 - `PlaybackEngine` 仅在 warm-up 后接受绝对样本索引调度；`CaptureEngine` 使用非阻塞写入的 Ring Buffer，溢出、欠载、丢帧和意外停流由控制线程通过 `check_health()` 处理。
+- `ChirpGenerator` 预生成只读单声道参考波形；参数由配置注入，刺激与背景音叠加后的削波检查仍由 `PlaybackEngine` 执行。
+- `AudioSynchronizer` 只使用 DAC/ADC 锚点映射样本时间；时钟偏移或漂移为 `None` 时必须保留未校准限制，禁止回退到 `current_time` 或 Python 调用时间。
+- `CaptureEngine.read_*_with_metadata()` 提供采集块绝对起点；发生丢帧后起点为 `None`，不得沿用连续时间轴。
 - 修改后端或引擎后验证 `tests/test_audio_backend.py`、`tests/test_audio_engines.py` 和真实枚举；真实链路用 `python -m app.audio_diagnostic` 独立验证，专题 @see docs/ai/05_AUDIO_GUIDE.md、docs/ai/04_ARCHITECTURE.md。
