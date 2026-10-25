@@ -9,6 +9,10 @@ QMainWindow {
     background-color: #10141b;
 }
 
+QLabel {
+    background: transparent;
+}
+
 QFrame#sidebar {
     background-color: #151a23;
     border-right: 1px solid #252c38;
@@ -232,6 +236,55 @@ QDoubleSpinBox:disabled {
     background-color: #151a22;
     color: #657080;
     border-color: #272f3a;
+}
+
+QSpinBox::up-button,
+QDoubleSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 22px;
+    background-color: #1b2330;
+    border-left: 1px solid #313b4a;
+    border-bottom: 1px solid #313b4a;
+    border-top-right-radius: 4px;
+}
+
+QSpinBox::down-button,
+QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 22px;
+    background-color: #1b2330;
+    border-left: 1px solid #313b4a;
+    border-bottom-right-radius: 4px;
+}
+
+QSpinBox::up-button:hover,
+QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover,
+QDoubleSpinBox::down-button:hover {
+    background-color: #273446;
+}
+
+QSpinBox::up-button:pressed,
+QDoubleSpinBox::up-button:pressed,
+QSpinBox::down-button:pressed,
+QDoubleSpinBox::down-button:pressed {
+    background-color: #236878;
+}
+
+QSpinBox::up-arrow,
+QDoubleSpinBox::up-arrow {
+    image: url("{{ASSETS_DIR}}/spin_up.svg");
+    width: 12px;
+    height: 12px;
+}
+
+QSpinBox::down-arrow,
+QDoubleSpinBox::down-arrow {
+    image: url("{{ASSETS_DIR}}/spin_down.svg");
+    width: 12px;
+    height: 12px;
 }
 
 QComboBox::drop-down {

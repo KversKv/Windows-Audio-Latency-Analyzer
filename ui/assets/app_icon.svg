@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="background" x1="176" y1="112" x2="856" y2="928" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22324A"/>
+      <stop offset="0.48" stop-color="#151F31"/>
+      <stop offset="1" stop-color="#0B111D"/>
+    </linearGradient>
+    <radialGradient id="cyanGlow" cx="0" cy="0" r="1" gradientTransform="translate(360 420) rotate(54) scale(490)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22D3EE" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="violetGlow" cx="0" cy="0" r="1" gradientTransform="translate(730 604) rotate(130) scale(400)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A78BFA" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#A78BFA" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="transmit" x1="176" y1="380" x2="488" y2="620" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#99F6E4"/>
+      <stop offset="0.48" stop-color="#67E8F9"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+    <linearGradient id="receive" x1="560" y1="330" x2="840" y2="680" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C4B5FD"/>
+      <stop offset="0.52" stop-color="#A78BFA"/>
+      <stop offset="1" stop-color="#818CF8"/>
+    </linearGradient>
+    <linearGradient id="measure" x1="400" y1="752" x2="688" y2="752" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#67E8F9"/>
+      <stop offset="1" stop-color="#A78BFA"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="48" y="48" width="928" height="928" rx="220" fill="url(#background)"/>
+  <rect x="48" y="48" width="928" height="928" rx="220" fill="url(#cyanGlow)"/>
+  <rect x="48" y="48" width="928" height="928" rx="220" fill="url(#violetGlow)"/>
+  <rect x="55" y="55" width="914" height="914" rx="213" fill="none" stroke="#BAE6FD" stroke-opacity="0.14" stroke-width="5"/>
+  <path d="M202 176C262 122 334 104 424 104H600C690 104 762 122 822 176" fill="none" stroke="#FFFFFF" stroke-opacity="0.055" stroke-width="12" stroke-linecap="round"/>
+
+  <path d="M176 500H262L320 378L388 622L448 500H488" fill="none" stroke="url(#transmit)" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M536 500H576L640 318L720 682L784 500H848" fill="none" stroke="url(#receive)" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <path d="M384 716V788M704 716V788" fill="none" stroke="#94A3B8" stroke-opacity="0.62" stroke-width="20" stroke-linecap="round"/>
+  <path d="M404 752H684" fill="none" stroke="url(#measure)" stroke-width="30" stroke-linecap="round"/>
+  <path d="M440 716L404 752L440 788M648 716L684 752L648 788" fill="none" stroke="url(#measure)" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

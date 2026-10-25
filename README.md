@@ -37,12 +37,13 @@ P0–P6 已完成。P7 的自动化集成回归、真实 WASAPI 连续流诊断�
 ├── app/                # 应用组装 / JSON 配置管理
 ├── ui/                 # 四大功能页（测试 / 历史 / 对比 / 设置）+ 主窗口
 │   ├── widgets/        # 通用控件
+│   ├── assets/         # 应用图标（SVG / PNG / ICO）
 │   └── styles/         # 深色主题 QSS
 ├── core/               # 测试编排 / 延迟分析 / 统计 / 校准 / UI 工作线程
 ├── audio/              # 后端抽象 / 连续播放 / 采集 / 背景音 / 环形缓冲
 ├── data/               # SQLite schema / repository / CSV 与 Excel 导出
 ├── tests/              # 单元测试 / 启动与 UI 验证
-├── spec/               # PyInstaller 打包配置（含运行时 QSS）
+├── spec/               # PyInstaller 打包配置（含运行时 QSS 与应用图标）
 ├── logs/               # 本地日志目录（不入库）
 └── docs/ai/            # AI 协作深度文档
 ```

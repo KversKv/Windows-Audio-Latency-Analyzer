@@ -1,9 +1,11 @@
 import os
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QEventLoop, QTimer
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from app.config import AppConfig, AudioConfig, ConfigManager
@@ -93,6 +95,20 @@ def test_long_pages_scroll_without_compressing_content(main_window, qt_applicati
         scroll_area.ensureWidgetVisible(page.save_button)
         qt_application.processEvents()
         assert scroll_area.verticalScrollBar().value() > 0
+
+
+def test_dark_theme_label_and_spin_arrow_resources(qt_application):
+    theme = load_dark_theme()
+    assert "QLabel {\n    background: transparent;\n}" in theme
+    assert "{{ASSETS_DIR}}" not in theme
+
+    assets_dir = Path(__file__).resolve().parents[1] / "ui" / "assets"
+    for asset_name in ("spin_up.svg", "spin_down.svg"):
+        asset_path = assets_dir / asset_name
+        assert asset_path.as_posix() in theme
+        icon = QIcon(str(asset_path))
+        assert not icon.pixmap(12, 12).isNull()
+        assert not icon.pixmap(24, 24).isNull()
 
 
 def test_settings_save_persists_configuration(main_window):

@@ -3,8 +3,10 @@ import logging
 import sys
 from collections.abc import Sequence
 from dataclasses import replace
+from pathlib import Path
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from app.config import ConfigManager
@@ -35,6 +37,8 @@ def run(argv: Sequence[str] | None = None) -> int:
         config = replace(config, audio=replace(config.audio, backend="simulation"))
 
     application = QApplication([sys.argv[0]])
+    icon_path = Path(__file__).resolve().parent.parent / "ui" / "assets" / "app_icon.png"
+    application.setWindowIcon(QIcon(str(icon_path)))
     application.setApplicationName("Windows Audio Latency Analyzer")
     application.setApplicationDisplayName("Windows 音频延迟分析器")
     application.setApplicationVersion(__version__)

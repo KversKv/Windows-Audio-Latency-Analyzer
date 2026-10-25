@@ -9,7 +9,12 @@ a = Analysis(
     [str(project_root / "main.py")],
     pathex=[str(project_root)],
     binaries=[],
-    datas=[(str(project_root / "ui" / "styles" / "dark_theme.qss"), "ui/styles")],
+    datas=[
+        (str(project_root / "ui" / "styles" / "dark_theme.qss"), "ui/styles"),
+        (str(project_root / "ui" / "assets" / "app_icon.png"), "ui/assets"),
+        (str(project_root / "ui" / "assets" / "spin_up.svg"), "ui/assets"),
+        (str(project_root / "ui" / "assets" / "spin_down.svg"), "ui/assets"),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -36,6 +41,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(project_root / "ui" / "assets" / "app_icon.ico"),
 )
 coll = COLLECT(
     exe,
