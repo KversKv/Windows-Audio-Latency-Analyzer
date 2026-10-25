@@ -9,3 +9,8 @@
 
 - **现象：** 从项目根目录执行 `python -m PyInstaller spec/latency_analyzer.spec` 时，spec 中的 `main.py` 被解析为 `spec/main.py`，导致入口不存在。
 - **正确做法：** 用 `Path(SPECPATH).parent` 构造入口、`pathex` 和 QSS 数据文件的项目根绝对路径；运行时读取的 `dark_theme.qss` 必须列入 `datas`。构建后分别以模拟和真实后端执行冻结 exe 的 `--smoke-test`，并用 `LATENCY_ANALYZER_CONFIG_DIR` 隔离配置、数据库和日志。
+
+## pyqtgraph 0.14 打包不能直接排除 QtOpenGL
+
+- `PlotCurveItem` 与 `Qt.OpenGLHelpers` 在导入阶段就加载 `QtOpenGL` / `QtOpenGLWidgets`；即使图表使用光栅渲染，排除这些 Python 绑定也会导致启动失败。
+- 未启用 OpenGL 时可以过滤 `opengl32sw.dll` 软件渲染后端；后续若启用 pyqtgraph OpenGL 加速，必须同时移除该过滤。
