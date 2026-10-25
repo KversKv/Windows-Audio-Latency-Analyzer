@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -28,7 +29,21 @@ class SettingsPage(QWidget):
         super().__init__(parent)
         self._config = config
         self._calibration_context: CalibrationContext | None = None
-        root_layout = QVBoxLayout(self)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+        self.page_scroll_area = QScrollArea()
+        self.page_scroll_area.setObjectName("pageScrollArea")
+        self.page_scroll_area.setWidgetResizable(True)
+        self.page_scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.page_scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        outer_layout.addWidget(self.page_scroll_area)
+
+        content = QWidget()
+        self.page_scroll_area.setWidget(content)
+        root_layout = QVBoxLayout(content)
         root_layout.setContentsMargins(30, 26, 30, 24)
         root_layout.setSpacing(16)
 

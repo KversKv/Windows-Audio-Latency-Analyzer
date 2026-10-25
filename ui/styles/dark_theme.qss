@@ -285,3 +285,58 @@ QToolTip {
     color: #e2e8f0;
     padding: 6px;
 }
+
+QScrollBar:vertical {
+    background: transparent;
+    border: none;
+    width: 12px;
+    margin: 4px 2px;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #435165;
+    border: none;
+    border-radius: 4px;
+    min-height: 36px;
+}
+
+QScrollBar:horizontal {
+    background: transparent;
+    border: none;
+    height: 12px;
+    margin: 2px 4px;
+}
+
+QScrollBar::handle:horizontal {
+    background-color: #435165;
+    border: none;
+    border-radius: 4px;
+    min-width: 36px;
+}
+
+QScrollBar::handle:vertical:hover,
+QScrollBar::handle:horizontal:hover {
+    background-color: #60738a;
+}
+
+QScrollBar::handle:vertical:pressed,
+QScrollBar::handle:horizontal:pressed {
+    background-color: #2f96a6;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical,
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    background: transparent;
+    border: none;
+    width: 0;
+    height: 0;
+}
+
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical,
+QScrollBar::add-page:horizontal,
+QScrollBar::sub-page:horizontal {
+    background: transparent;
+}

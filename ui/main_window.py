@@ -145,7 +145,8 @@ class MainWindow(QMainWindow):
         if not 0 <= index < self.page_stack.count():
             raise IndexError(f"无效页面索引：{index}")
         self.page_stack.setCurrentIndex(index)
-        self.navigation_buttons[index].setChecked(True)
+        for button_index, button in enumerate(self.navigation_buttons):
+            button.setChecked(button_index == index)
         if index == 1:
             self.history_page.refresh()
         elif index == 2:

@@ -13,6 +13,7 @@ from core.device_service import DeviceService
 from core.persistence_service import PersistenceService
 from core.test_state_machine import TestState as SessionState
 from ui.main_window import MainWindow
+from ui.styles import load_dark_theme
 
 
 @pytest.fixture
@@ -67,7 +68,31 @@ def test_device_refresh_and_page_navigation(main_window):
     for index in range(window.page_stack.count()):
         window.navigation_buttons[index].click()
         assert window.page_stack.currentIndex() == index
-        assert window.navigation_buttons[index].isChecked() is True
+        assert [button.isChecked() for button in window.navigation_buttons] == [
+            button_index == index for button_index in range(window.page_stack.count())
+        ]
+
+
+def test_long_pages_scroll_without_compressing_content(main_window, qt_application):
+    window, _ = main_window
+    window.setStyleSheet(load_dark_theme())
+    window.show()
+    assert _wait_for_signal(window.test_page.refresh_finished) is True
+    window.resize(1100, 720)
+
+    for index, page in ((0, window.test_page), (3, window.settings_page)):
+        window.set_current_page(index)
+        qt_application.processEvents()
+        scroll_area = page.page_scroll_area
+        content = scroll_area.widget()
+        assert scroll_area.widgetResizable() is True
+        assert content.height() >= content.minimumSizeHint().height()
+        assert content.height() > scroll_area.viewport().height()
+        assert scroll_area.verticalScrollBar().maximum() > 0
+
+        scroll_area.ensureWidgetVisible(page.save_button)
+        qt_application.processEvents()
+        assert scroll_area.verticalScrollBar().value() > 0
 
 
 def test_settings_save_persists_configuration(main_window):
