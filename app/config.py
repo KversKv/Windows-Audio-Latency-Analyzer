@@ -18,12 +18,28 @@ class AudioConfig:
     sample_rate: int = 48000
     output_device_id: int | str | None = None
     input_device_id: int | str | None = None
+    output_channels: int = 1
+    input_channels: int = 1
+    blocksize: int = 0
+    background_kind: str = "band_limited"
+    background_amplitude: float = 0.005
+    capture_buffer_seconds: float = 8.0
 
     def __post_init__(self) -> None:
         if self.backend not in {"sounddevice", "simulation"}:
             raise ValueError(f"不支持的音频后端：{self.backend}")
         if not 8000 <= self.sample_rate <= 192000:
             raise ValueError("采样率必须在 8000 到 192000 Hz 之间")
+        if self.output_channels not in {1, 2} or self.input_channels not in {1, 2}:
+            raise ValueError("播放和录音声道数仅支持 1 或 2")
+        if self.blocksize < 0:
+            raise ValueError("音频块大小不能为负数")
+        if self.background_kind not in {"band_limited", "pink"}:
+            raise ValueError(f"不支持的背景音类型：{self.background_kind}")
+        if not 0 < self.background_amplitude < 1:
+            raise ValueError("背景音幅度必须在 0 到 1 之间")
+        if not 1.0 <= self.capture_buffer_seconds <= 60.0:
+            raise ValueError("采集缓冲区时长必须在 1 到 60 秒之间")
 
 
 @dataclass(frozen=True, slots=True)

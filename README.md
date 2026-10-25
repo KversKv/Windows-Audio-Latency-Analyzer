@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-P0（项目骨架与 UI 基础）已完成：应用可启动，提供测试、历史、对比、设置四个页面，支持播放/录音设备独立枚举与刷新、离线模拟设备和 JSON 配置保存。连续播放/采集、延迟分析、数据库与图表将在 P1 及后续阶段接入。
+P0（项目骨架与 UI 基础）和 P1（音频引擎与连续流）已完成：应用支持设备独立枚举、JSON 配置、连续背景播放、采集环形缓冲、预热及按样本索引调度探针；真实 WASAPI 播放/采集链路诊断已通过。Chirp 延迟分析、测试控制器、数据库与图表将在 P2 及后续阶段接入，当前诊断结果不代表声学延迟测量。
 
 ## 目标特性
 
@@ -39,7 +39,7 @@ P0（项目骨架与 UI 基础）已完成：应用可启动，提供测试、�
 │   ├── widgets/        # 通用控件
 │   └── styles/         # 深色主题 QSS
 ├── core/               # UI 工作线程封装；后续接入测试编排与分析
-├── audio/              # 后端抽象 / 设备管理；后续接入连续播放与采集
+├── audio/              # 后端抽象 / 连续播放 / 采集 / 背景音 / 环形缓冲
 ├── data/               # SQLite / repository / 导出（后续阶段）
 ├── tests/              # 单元测试 / 启动与 UI 验证
 ├── logs/               # 本地日志目录（不入库）
@@ -70,6 +70,17 @@ python main.py --simulate
 ```
 
 默认配置写入 `%APPDATA%\WindowsAudioLatencyAnalyzer\config.json`，运行日志写入同目录的 `logs/`。测试或便携运行可通过 `LATENCY_ANALYZER_CONFIG_DIR` 环境变量指定独立配置目录。后端设置在下次启动后生效。
+
+### 音频链路诊断
+
+真实设备诊断使用配置中的设备和采样率，可用参数覆盖；先枚举设备，再执行连续流诊断：
+
+```powershell
+python -m app.audio_diagnostic --list-devices
+python -m app.audio_diagnostic --warmup-seconds 3
+```
+
+可通过 `--output-device`、`--input-device` 和 `--sample-rate` 指定设备与采样率。诊断只验证连续播放、采集、预热和探针调度，不计算声学延迟；模拟后端不提供实时流。
 
 ## 测试
 

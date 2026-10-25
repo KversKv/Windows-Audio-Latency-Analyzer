@@ -15,6 +15,12 @@ def test_config_round_trip(tmp_path):
             sample_rate=96000,
             output_device_id="sim-output",
             input_device_id="sim-input",
+            output_channels=2,
+            input_channels=1,
+            blocksize=256,
+            background_kind="pink",
+            background_amplitude=0.002,
+            capture_buffer_seconds=12.0,
         ),
         measurement=MeasurementConfig(default_test_count=50, warmup_seconds=5.5),
     )

@@ -1,9 +1,11 @@
 import logging
 import os
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import sounddevice as sd
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,66 @@ class AudioDevice:
         return self.max_output_channels > 0
 
 
+@dataclass(slots=True)
+class AudioCallbackTime:
+    input_buffer_adc_time: float = 0.0
+    current_time: float = 0.0
+    output_buffer_dac_time: float = 0.0
+
+    def update(self, raw_time: Any) -> None:
+        self.input_buffer_adc_time = float(raw_time.inputBufferAdcTime)
+        self.current_time = float(raw_time.currentTime)
+        self.output_buffer_dac_time = float(raw_time.outputBufferDacTime)
+
+
+@dataclass(slots=True)
+class AudioStreamStatus:
+    input_underflow: bool = False
+    input_overflow: bool = False
+    output_underflow: bool = False
+    output_overflow: bool = False
+    priming_output: bool = False
+
+    def update(self, raw_status: Any) -> None:
+        self.input_underflow = bool(raw_status.input_underflow)
+        self.input_overflow = bool(raw_status.input_overflow)
+        self.output_underflow = bool(raw_status.output_underflow)
+        self.output_overflow = bool(raw_status.output_overflow)
+        self.priming_output = bool(raw_status.priming_output)
+
+
+AudioCallback = Callable[[np.ndarray, int, AudioCallbackTime, AudioStreamStatus], None]
+
+
+class AudioStream(ABC):
+    @abstractmethod
+    def start(self) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def stop(self) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def close(self) -> None:
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def is_active(self) -> bool:
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def is_closed(self) -> bool:
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def callback_error(self) -> Exception | None:
+        raise NotImplementedError
+
+
 class AudioBackend(ABC):
     display_name = "未知音频后端"
     is_simulation = False
@@ -39,6 +101,134 @@ class AudioBackend(ABC):
     @abstractmethod
     def list_devices(self) -> list[AudioDevice]:
         raise NotImplementedError
+
+    @abstractmethod
+    def open_output_stream(
+        self,
+        *,
+        device_id: int | str | None,
+        sample_rate: int,
+        channels: int,
+        blocksize: int,
+        callback: AudioCallback,
+    ) -> AudioStream:
+        raise NotImplementedError
+
+    @abstractmethod
+    def open_input_stream(
+        self,
+        *,
+        device_id: int | str | None,
+        sample_rate: int,
+        channels: int,
+        blocksize: int,
+        callback: AudioCallback,
+    ) -> AudioStream:
+        raise NotImplementedError
+
+
+class SoundDeviceStream(AudioStream):
+    def __init__(
+        self,
+        *,
+        device_id: int | str | None,
+        sample_rate: int,
+        channels: int,
+        blocksize: int,
+        callback: AudioCallback,
+        is_output: bool,
+    ) -> None:
+        self._callback = callback
+        self._callback_time = AudioCallbackTime()
+        self._callback_status = AudioStreamStatus()
+        self._callback_error: Exception | None = None
+        self._closed = False
+        stream_class = sd.OutputStream if is_output else sd.InputStream
+        raw_callback = self._output_callback if is_output else self._input_callback
+        self._stream = stream_class(
+            device=device_id,
+            samplerate=sample_rate,
+            channels=channels,
+            blocksize=blocksize,
+            dtype="float32",
+            callback=raw_callback,
+        )
+
+    @property
+    def is_active(self) -> bool:
+        if self._closed:
+            return False
+        try:
+            return bool(self._stream.active)
+        except Exception as exc:
+            raise AudioBackendError(f"无法读取音频流状态：{exc}") from exc
+
+    @property
+    def is_closed(self) -> bool:
+        return self._closed
+
+    @property
+    def callback_error(self) -> Exception | None:
+        return self._callback_error
+
+    def start(self) -> None:
+        try:
+            self._stream.start()
+        except Exception as exc:
+            raise AudioBackendError(f"无法启动音频流：{exc}") from exc
+
+    def stop(self) -> None:
+        if self._closed:
+            return
+        try:
+            if self._stream.active:
+                self._stream.stop()
+        except Exception as exc:
+            raise AudioBackendError(f"无法停止音频流：{exc}") from exc
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        try:
+            self._stream.close()
+        except Exception as exc:
+            raise AudioBackendError(f"无法关闭音频流：{exc}") from exc
+        finally:
+            self._closed = True
+
+    def _output_callback(
+        self,
+        outdata: np.ndarray,
+        frames: int,
+        raw_time: Any,
+        raw_status: Any,
+    ) -> None:
+        if self._callback_error is not None:
+            outdata.fill(0)
+            return
+        self._callback_time.update(raw_time)
+        self._callback_status.update(raw_status)
+        try:
+            self._callback(outdata, frames, self._callback_time, self._callback_status)
+        except Exception as exc:
+            self._callback_error = exc
+            outdata.fill(0)
+
+    def _input_callback(
+        self,
+        indata: np.ndarray,
+        frames: int,
+        raw_time: Any,
+        raw_status: Any,
+    ) -> None:
+        if self._callback_error is not None:
+            return
+        self._callback_time.update(raw_time)
+        self._callback_status.update(raw_status)
+        try:
+            self._callback(indata, frames, self._callback_time, self._callback_status)
+        except Exception as exc:
+            self._callback_error = exc
 
 
 class SoundDeviceBackend(AudioBackend):
@@ -65,6 +255,50 @@ class SoundDeviceBackend(AudioBackend):
                 continue
             devices.append(self._to_audio_device(index, raw_device, host_apis))
         return devices
+
+    def open_output_stream(
+        self,
+        *,
+        device_id: int | str | None,
+        sample_rate: int,
+        channels: int,
+        blocksize: int,
+        callback: AudioCallback,
+    ) -> AudioStream:
+        try:
+            return SoundDeviceStream(
+                device_id=device_id,
+                sample_rate=sample_rate,
+                channels=channels,
+                blocksize=blocksize,
+                callback=callback,
+                is_output=True,
+            )
+        except Exception as exc:
+            logger.error("打开 PortAudio 播放流失败", exc_info=True)
+            raise AudioBackendError(f"无法打开播放设备 {device_id!r}：{exc}") from exc
+
+    def open_input_stream(
+        self,
+        *,
+        device_id: int | str | None,
+        sample_rate: int,
+        channels: int,
+        blocksize: int,
+        callback: AudioCallback,
+    ) -> AudioStream:
+        try:
+            return SoundDeviceStream(
+                device_id=device_id,
+                sample_rate=sample_rate,
+                channels=channels,
+                blocksize=blocksize,
+                callback=callback,
+                is_output=False,
+            )
+        except Exception as exc:
+            logger.error("打开 PortAudio 录音流失败", exc_info=True)
+            raise AudioBackendError(f"无法打开录音设备 {device_id!r}：{exc}") from exc
 
     @staticmethod
     def _to_audio_device(
@@ -112,6 +346,28 @@ class SimulatedAudioBackend(AudioBackend):
 
     def list_devices(self) -> list[AudioDevice]:
         return list(self._devices)
+
+    def open_output_stream(
+        self,
+        *,
+        device_id: int | str | None,
+        sample_rate: int,
+        channels: int,
+        blocksize: int,
+        callback: AudioCallback,
+    ) -> AudioStream:
+        raise AudioBackendError("离线模拟后端仅用于设备枚举，实时流诊断请使用 sounddevice 后端")
+
+    def open_input_stream(
+        self,
+        *,
+        device_id: int | str | None,
+        sample_rate: int,
+        channels: int,
+        blocksize: int,
+        callback: AudioCallback,
+    ) -> AudioStream:
+        raise AudioBackendError("离线模拟后端仅用于设备枚举，实时流诊断请使用 sounddevice 后端")
 
 
 def create_audio_backend(backend_name: str, sample_rate: int) -> AudioBackend:
