@@ -15,6 +15,10 @@ class AudioDeviceManager:
     def __init__(self, backend: AudioBackend) -> None:
         self._backend = backend
 
+    @property
+    def backend(self) -> AudioBackend:
+        return self._backend
+
     def scan(self) -> DeviceInventory:
         devices = tuple(self._backend.list_devices())
         return DeviceInventory(

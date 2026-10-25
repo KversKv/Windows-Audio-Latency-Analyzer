@@ -2,7 +2,7 @@ import logging
 
 from PySide6.QtCore import QObject, Signal, Slot
 
-from audio.audio_backend import AudioDevice
+from audio.audio_backend import AudioBackend, AudioDevice
 from audio.audio_device_manager import AudioDeviceManager, DeviceInventory
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,10 @@ __all__ = [
 class DeviceService:
     def __init__(self, device_manager: AudioDeviceManager) -> None:
         self._device_manager = device_manager
+
+    @property
+    def backend(self) -> AudioBackend:
+        return self._device_manager.backend
 
     def scan(self) -> DeviceInventory:
         return self._device_manager.scan()

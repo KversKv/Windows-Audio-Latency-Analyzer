@@ -50,12 +50,24 @@ class MainWindow(QMainWindow):
         self._build_ui(device_service, config)
         self.setStatusBar(QStatusBar())
         self.backend_status_label = QLabel("音频后端初始化中")
+        self.test_state_status_label = QLabel("测试：空闲")
+        self.sample_rate_status_label = QLabel("输出 / 采集：—")
+        self.test_progress_status_label = QLabel("进度：—")
+        self.statusBar().addPermanentWidget(self.test_state_status_label)
+        self.statusBar().addPermanentWidget(self.sample_rate_status_label)
+        self.statusBar().addPermanentWidget(self.test_progress_status_label)
         self.statusBar().addPermanentWidget(self.backend_status_label)
         self.statusBar().showMessage("就绪")
 
         self.test_page.devices_refreshed.connect(self._on_devices_refreshed)
         self.test_page.refresh_failed.connect(self._on_device_error)
         self.test_page.device_selection_changed.connect(self._on_device_selection_changed)
+        self.test_page.state_changed.connect(self._on_test_state_changed)
+        self.test_page.progress_changed.connect(self._on_test_progress_changed)
+        self.test_page.audio_parameters_changed.connect(self._on_audio_parameters_changed)
+        self.test_page.status_message.connect(self._on_test_status)
+        self.test_page.session_save_requested.connect(self._on_session_save_requested)
+        self.configuration_saved.connect(self.test_page.update_config)
         self.settings_page.save_requested.connect(self._save_settings)
         QTimer.singleShot(0, self.test_page.refresh_devices)
 
@@ -128,6 +140,25 @@ class MainWindow(QMainWindow):
     def _on_device_error(self, message: str) -> None:
         self.backend_status_label.setText("设备枚举失败")
         self.statusBar().showMessage(f"设备刷新失败：{message}", 8000)
+
+    def _on_test_state_changed(self, _state: object) -> None:
+        self.test_state_status_label.setText(f"测试：{self.test_page.state_label.text()}")
+
+    def _on_test_progress_changed(self, completed: int, total: int) -> None:
+        progress_text = f"{completed} / {total}" if total else "—"
+        self.test_progress_status_label.setText(f"进度：{progress_text}")
+
+    def _on_audio_parameters_changed(self, output_rate: int, input_rate: int) -> None:
+        self.sample_rate_status_label.setText(f"输出 / 采集：{output_rate} / {input_rate} Hz")
+
+    def _on_test_status(self, message: str) -> None:
+        self.statusBar().showMessage(message, 6000)
+
+    def _on_session_save_requested(self, _snapshot: object) -> None:
+        self.statusBar().showMessage(
+            "会话快照已准备；SQLite 持久化尚未接入，当前未写入数据库",
+            8000,
+        )
 
     def _on_device_selection_changed(self) -> None:
         self._config = replace(

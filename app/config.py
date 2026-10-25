@@ -56,6 +56,11 @@ class MeasurementConfig:
     min_correlation: float = 0.35
     min_latency_ms: float = 0.0
     max_latency_ms: float = 200.0
+    stimulus_lead_ms: float = 100.0
+    capture_tail_ms: float = 30.0
+    inter_measurement_delay_ms: float = 150.0
+    simulation_delay_ms: float = 25.0
+    simulation_snr_db: float = 20.0
 
     def __post_init__(self) -> None:
         if self.default_test_count < 1:
@@ -81,6 +86,19 @@ class MeasurementConfig:
             raise ValueError("最小有效延迟不能为负数")
         if not math.isfinite(self.max_latency_ms) or self.max_latency_ms <= self.min_latency_ms:
             raise ValueError("最大有效延迟必须大于最小有效延迟")
+        if not math.isfinite(self.stimulus_lead_ms) or not 0 < self.stimulus_lead_ms <= 1000:
+            raise ValueError("刺激信号提前量必须在 0 到 1000 ms 之间")
+        if not math.isfinite(self.capture_tail_ms) or not 0 < self.capture_tail_ms <= 1000:
+            raise ValueError("采集尾长必须在 0 到 1000 ms 之间")
+        if (
+            not math.isfinite(self.inter_measurement_delay_ms)
+            or not 0 <= self.inter_measurement_delay_ms <= 5000
+        ):
+            raise ValueError("测量间隔必须在 0 到 5000 ms 之间")
+        if not math.isfinite(self.simulation_delay_ms) or self.simulation_delay_ms < 0:
+            raise ValueError("模拟延迟必须为大于等于 0 的有限数值")
+        if not math.isfinite(self.simulation_snr_db):
+            raise ValueError("模拟 SNR 必须为有限数值")
 
 
 @dataclass(frozen=True, slots=True)

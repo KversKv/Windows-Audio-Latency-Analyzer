@@ -1,5 +1,3 @@
-import threading
-
 import numpy as np
 
 
@@ -12,19 +10,21 @@ class AudioRingBuffer:
         self.capacity_frames = capacity_frames
         self.channels = channels
         self._buffer = np.zeros((capacity_frames, channels), dtype=np.float32)
-        self._lock = threading.Lock()
         self._read_position = 0
         self._write_position = 0
-        self._available = 0
+        self._oldest_position = 0
         self._total_frames_received = 0
         self._total_frames_written = 0
         self._overwritten_frames = 0
         self._skipped_frames = 0
-        self._callback_dropped_frames = 0
 
     @property
     def available(self) -> int:
-        return self._available
+        read_position = max(self._read_position, self._oldest_position)
+        return min(
+            self.capacity_frames,
+            max(0, self._write_position - read_position),
+        )
 
     @property
     def total_frames_received(self) -> int:
@@ -43,12 +43,8 @@ class AudioRingBuffer:
         return self._skipped_frames
 
     @property
-    def callback_dropped_frames(self) -> int:
-        return self._callback_dropped_frames
-
-    @property
     def dropped_frames(self) -> int:
-        return self._overwritten_frames + self._skipped_frames + self._callback_dropped_frames
+        return self._overwritten_frames + self._skipped_frames
 
     def write(self, samples: np.ndarray) -> int:
         if samples.ndim != 2 or samples.shape[1] != self.channels:
@@ -58,69 +54,74 @@ class AudioRingBuffer:
         original_frames = samples.shape[0]
         if original_frames == 0:
             return 0
-        if not self._lock.acquire(blocking=False):
-            self._total_frames_received += original_frames
-            self._callback_dropped_frames += original_frames
-            return 0
 
-        try:
-            self._total_frames_received += original_frames
-            frames = original_frames
-            if frames > self.capacity_frames:
-                skipped = frames - self.capacity_frames
-                self._skipped_frames += skipped
-                self._overwritten_frames += self._available
-                self._available = 0
-                self._read_position = self._write_position
-                samples = samples[skipped:]
-                frames = self.capacity_frames
-            else:
-                overwrite = max(0, self._available + frames - self.capacity_frames)
-                if overwrite:
-                    self._read_position = (self._read_position + overwrite) % self.capacity_frames
-                    self._available -= overwrite
-                    self._overwritten_frames += overwrite
+        self._total_frames_received += original_frames
+        write_position = self._write_position
+        read_position = max(self._read_position, self._oldest_position)
+        available = max(0, write_position - read_position)
+        frames = original_frames
+        if frames > self.capacity_frames:
+            skipped = frames - self.capacity_frames
+            self._skipped_frames += skipped
+            overwritten = available
+            samples = samples[skipped:]
+            frames = self.capacity_frames
+        else:
+            overwritten = max(0, available + frames - self.capacity_frames)
 
-            remaining = frames
-            source_position = 0
-            while remaining:
-                count = min(remaining, self.capacity_frames - self._write_position)
-                self._buffer[self._write_position : self._write_position + count] = samples[
-                    source_position : source_position + count
-                ]
-                self._write_position = (self._write_position + count) % self.capacity_frames
-                source_position += count
-                remaining -= count
-            self._available += frames
-            self._total_frames_written += frames
-            return frames
-        finally:
-            self._lock.release()
+        if overwritten:
+            self._overwritten_frames += overwritten
+            # 先发布覆盖边界；读者在拷贝后发现边界变化时会放弃该次读取。
+            self._oldest_position = write_position + frames - self.capacity_frames
+
+        remaining = frames
+        source_position = 0
+        buffer_position = write_position % self.capacity_frames
+        while remaining:
+            count = min(remaining, self.capacity_frames - buffer_position)
+            self._buffer[buffer_position : buffer_position + count] = samples[
+                source_position : source_position + count
+            ]
+            buffer_position = (buffer_position + count) % self.capacity_frames
+            source_position += count
+            remaining -= count
+        self._total_frames_written += frames
+        self._write_position = write_position + frames
+        return frames
 
     def read(self, frames: int) -> np.ndarray:
         if frames < 0:
             raise ValueError("读取帧数不能为负数")
-        with self._lock:
-            count = min(frames, self._available)
+        for _ in range(3):
+            oldest_position = self._oldest_position
+            write_position = self._write_position
+            read_position = max(self._read_position, oldest_position)
+            count = min(frames, max(0, write_position - read_position))
+            if count == 0:
+                self._read_position = read_position
+                return np.empty((0, self.channels), dtype=np.float32)
+
             result = np.empty((count, self.channels), dtype=np.float32)
             remaining = count
             destination_position = 0
+            buffer_position = read_position % self.capacity_frames
             while remaining:
-                chunk = min(remaining, self.capacity_frames - self._read_position)
+                chunk = min(remaining, self.capacity_frames - buffer_position)
                 result[destination_position : destination_position + chunk] = self._buffer[
-                    self._read_position : self._read_position + chunk
+                    buffer_position : buffer_position + chunk
                 ]
-                self._read_position = (self._read_position + chunk) % self.capacity_frames
+                buffer_position = (buffer_position + chunk) % self.capacity_frames
                 destination_position += chunk
                 remaining -= chunk
-            self._available -= count
+
+            if self._oldest_position != oldest_position:
+                continue
+            self._read_position = read_position + count
             return result
+        return np.empty((0, self.channels), dtype=np.float32)
 
     def read_all(self) -> np.ndarray:
         return self.read(self.available)
 
     def clear(self) -> None:
-        with self._lock:
-            self._read_position = 0
-            self._write_position = 0
-            self._available = 0
+        self._read_position = self._write_position
