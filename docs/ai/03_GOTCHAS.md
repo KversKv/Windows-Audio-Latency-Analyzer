@@ -5,6 +5,11 @@
 - **现象：** 在 PySide6 6.12 / offscreen 环境中，`QSignalSpy.wait(2000)` 可接收普通 `QTimer` 信号，但本项目的设备枚举、配置保存 queued 信号未在断言前分发；测试失败后还可能因窗口线程未清理而异常退出。
 - **正确做法：** 使用 `QEventLoop` + 单发 `QTimer` 显式运行事件循环并设置超时；连续操作等待对应的 `finished` 信号，避免数据到达后线程尚未收尾的竞争。pytest fixture 必须在失败路径也执行窗口与线程清理。参考 `tests/test_main_window.py`。
 
+## 后台设备扫描导致页面自动滚动
+
+- **现象：** 设备下拉框获得焦点后，后台扫描将其临时禁用，Qt 把焦点移到下方的 `QSpinBox`，`QScrollArea` 随之自动滚动，看起来像页面无故向下跳转。
+- **正确做法：** 扫描只禁用重复刷新和测量 / 诊断启动，保持设备与诊断模式选择可用；音频活动期间的禁用逻辑不变。焦点回归测试的 fixture 必须在窗口销毁前执行 `clearFocus()`，否则共享 `QApplication` 的组合测试可能在后续线程收尾时发生进程级访问冲突。
+
 ## PyInstaller spec 位于子目录时的资源路径
 
 - **现象：** 从项目根目录执行 `python -m PyInstaller spec/latency_analyzer.spec` 时，spec 中的 `main.py` 被解析为 `spec/main.py`，导致入口不存在。
@@ -20,3 +25,9 @@
 - **现象：** `PaWasapi_UpdateDeviceList` 符号存在，但调用固定返回 `paInternalError (-9986)`；monkeypatch 单元测试无法发现该真实兼容性问题。
 - **原因：** sounddevice 0.5.6 随附的 PortAudio V19.7.0 使用默认构建，`PA_WASAPI_MAX_CONST_DEVICE_COUNT=0`，对应源码直接返回 `paInternalError`。
 - **正确做法：** 优先调用专用更新接口；仅对 `-9986` 在无活动流、扫描单飞且未开始测量时通过 `sd._terminate()` / `sd._initialize()` 重建设备表，其他错误仍明确失败。必须执行真实 `python -m app.audio_diagnostic --list-devices` 与 Qt 后台线程冒烟，活动会话中禁止重建。
+- **CFFI 能力探测：** `hasattr(sd._lib, 未导出符号)` 可能直接抛 `ffi.error`，不能当作普通 `AttributeError`；缺失 Loopback 符号属于明确不支持，不应导致普通枚举失败或产生误导性异常警告。
+
+## QThread 活动会话的有界关闭
+
+- **现象：** UI 调用 `TestController.shutdown()` 并阻塞等待时，Worker 已请求停止但线程仍等到超时；完整 offscreen 套件还曾在收尾点进程级中止。
+- **正确做法：** `worker.finished → thread.quit` 显式使用 `Qt.ConnectionType.DirectConnection`，使工作线程完成时直接请求事件循环退出，不依赖被阻塞的 UI 先处理 queued 槽。关闭仍必须有超时，连续操作优先异步等待 `finished`，并验证停止后资源释放和下一次会话可启动。

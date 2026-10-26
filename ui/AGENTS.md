@@ -4,8 +4,9 @@
 
 - `MainWindow` 只负责页面组装、导航和跨页面信号；页面内部交互留在对应页面文件，禁止把业务逻辑上移到 `main.py`。
 - UI 不直接 import audio / data，也不直接调用 sounddevice；设备访问经 `core.device_service`，配置保存经 `core.config_worker`，历史持久化与导出经 `core.persistence_controller`。
-- `app.config` 仅作为纯配置模型共享；界面线程不得直接调用其文件读写。设备枚举与配置保存期间要禁用重复操作，并以 `finished` 恢复状态。
+- `app.config` 仅作为纯配置模型共享；界面线程不得直接调用其文件读写。设备枚举与配置保存期间要禁用重复操作，并以 `finished` 恢复状态。后台扫描不得通过禁用聚焦的设备 / 诊断模式控件触发滚动区域自动跟随焦点；启动与重复刷新互斥保持不变。
 - 未接入的测量、历史、对比功能必须保持禁用或空状态，禁止展示虚构数值；模拟后端始终显示“非真实测量”提示。
+- `DiagnosticsPanel` 分模式保存结果与配置，强制单次、零补偿且无校准，不进入历史统计；模拟后端或能力不支持时禁止启动。普通测量、诊断和设备扫描必须互斥，诊断结束后补扫设备。
 - 深色样式集中在 `styles/dark_theme.qss`，通过 `ui.styles.load_dark_theme()` 加载；新增运行时资源须纳入 P7 打包核对。
 - `QLabel` 默认背景保持透明；SpinBox 按钮与 SVG 箭头须显式设置子控件尺寸，资源路径由主题加载器解析，禁依赖原生箭头的高分屏表现。
 - 对话框必须传 `parent`，确认/取消按钮显式设置 default / autoDefault；中文一律简体。

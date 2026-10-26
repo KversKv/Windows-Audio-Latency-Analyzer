@@ -5,7 +5,7 @@
 - `DeviceService` 是 UI 与音频设备管理之间的同步 facade；UI 只能经 `DeviceEnumerationWorker` 调用，禁止在界面线程直接扫描设备。
 - Worker 的 `succeeded` / `failed` / `finished` 必须成对设计：`finished` 无论成功或异常都发出，用于退出线程和恢复 UI；异常日志带 `exc_info=True`。
 - `ConfigSaveWorker` 只执行调用方注入的保存回调；回调与工作线程内禁止访问控件，结果只能经 Qt 信号返回。
-- QThread、Worker 的引用由调用方保留至收尾；连续操作等待 `finished`，关闭时采用有上限的等待，禁止销毁仍在运行的线程。
+- QThread、Worker 的引用由调用方保留至收尾；连续操作等待 `finished`，关闭时采用有上限的等待，禁止销毁仍在运行的线程。`TestController` 的 `worker.finished → thread.quit` 使用 `DirectConnection`，确保 UI 有界等待期间无需先处理 queued 退出事件。
 - 状态机、分析和统计放在本层；耗时数值处理使用专用 Worker，不得移入 UI 或 PortAudio 回调线程。
 - `LatencyAnalyzer` 在分析线程执行归一化局部互相关；无效结果返回 `LatencyMeasurement.invalid_reason`，超范围延迟保留原值，不得改成静默丢弃。
 - `StatisticsEngine` 仅聚合有效测量且保留无效原因计数；`CalibrationManager` 只使用显式补偿值，所选配置必须严格匹配设备、采样率和音频模式。

@@ -14,6 +14,7 @@ from audio.audio_device_manager import AudioDeviceManager
 from core.device_service import DeviceService
 from core.persistence_service import PersistenceService
 from core.test_state_machine import TestState as SessionState
+from ui.diagnostics_panel import DiagnosticMode
 from ui.main_window import MainWindow
 from ui.styles import load_dark_theme
 
@@ -76,6 +77,9 @@ def main_window(qt_application, tmp_path):
     service = DeviceService(AudioDeviceManager(backend))
     window = MainWindow(service, config_manager, config)
     yield window, config_manager
+    focus_widget = qt_application.focusWidget()
+    if focus_widget is not None:
+        focus_widget.clearFocus()
     window.shutdown()
     window.close()
     window.deleteLater()
@@ -128,6 +132,51 @@ def test_device_refresh_and_page_navigation(main_window):
         assert [button.isChecked() for button in window.navigation_buttons] == [
             button_index == index for button_index in range(window.page_stack.count())
         ]
+
+
+def test_test_page_opens_at_top_without_focus_auto_scroll(main_window, qt_application):
+    window, _ = main_window
+    window.setStyleSheet(load_dark_theme())
+    window.resize(1100, 720)
+    window.show()
+    window.activateWindow()
+    assert _wait_for_signal(window.test_page.refresh_finished) is True
+    qt_application.processEvents()
+
+    scroll_area = window.test_page.page_scroll_area
+    focus_widget = qt_application.focusWidget()
+    focus_name = focus_widget.metaObject().className() if focus_widget is not None else "None"
+    assert scroll_area.verticalScrollBar().maximum() > 0
+    assert scroll_area.verticalScrollBar().value() == 0, (
+        f"页面显示后自动滚动到 {scroll_area.verticalScrollBar().value()}，"
+        f"焦点控件为 {focus_name}"
+    )
+
+
+def test_device_refresh_preserves_focus_and_scroll_position(main_window, qt_application):
+    window, _ = main_window
+    window.setStyleSheet(load_dark_theme())
+    window.resize(1100, 720)
+    window.show()
+    window.activateWindow()
+    assert _wait_for_signal(window.test_page.refresh_finished) is True
+    page = window.test_page
+    page._auto_refresh_timer.stop()
+    page.output_combo.setFocus()
+    qt_application.processEvents()
+    assert qt_application.focusWidget() is page.output_combo
+    assert page.page_scroll_area.verticalScrollBar().value() == 0
+
+    page.refresh_devices()
+    assert _wait_for_signal(page.refresh_finished) is True
+    qt_application.processEvents()
+
+    focus_widget = qt_application.focusWidget()
+    focus_name = focus_widget.metaObject().className() if focus_widget is not None else "None"
+    assert qt_application.focusWidget() is page.output_combo
+    assert page.page_scroll_area.verticalScrollBar().value() == 0, (
+        f"设备刷新后页面自动滚动，焦点控件为 {focus_name}"
+    )
 
 
 def test_long_pages_scroll_without_compressing_content(main_window, qt_application):
@@ -558,3 +607,89 @@ def test_auto_refresh_defers_while_controller_is_active(dynamic_window, monkeypa
     assert backend.scan_count == initial_scan_count + 1
     assert page.output_combo.count() == initial_output_count + 1
     assert page.selected_output_device_id() == "out-a"
+
+
+def test_simulation_disables_all_real_diagnostic_modes(main_window):
+    window, _ = main_window
+    window.show()
+    assert _wait_for_signal(window.test_page.refresh_finished) is True
+    page = window.test_page
+    page._auto_refresh_timer.stop()
+    panel = page.diagnostics_panel
+    save_requests = []
+    page.session_save_requested.connect(save_requests.append)
+
+    for mode in DiagnosticMode:
+        panel.mode_combo.setCurrentIndex(panel.mode_combo.findData(mode))
+        assert panel.start_button.isEnabled() is False
+        assert "离线模拟后端不提供真实环回诊断" in panel.support_label.text()
+        assert panel.start(page.session_config()) is False
+        assert panel.record_for(mode) is None
+        assert panel.config_for(mode) is None
+        assert panel.latency_value_label.text() == "—"
+        assert "不会生成替代测量结果" in panel.error_label.text()
+
+    assert page.controller.records == ()
+    assert page.controller.snapshot is None
+    assert save_requests == []
+
+    panel.set_external_busy(True)
+    assert panel.start(page.session_config()) is False
+    assert "普通测量或设备刷新" in panel.error_label.text()
+    panel.set_external_busy(False)
+    window.shutdown()
+    assert panel.start_button.isEnabled() is False
+    assert page.refresh_button.isEnabled() is False
+    assert page._auto_refresh_timer.isActive() is False
+
+
+def test_diagnostics_defer_refresh_and_block_normal_measurement(
+    dynamic_window,
+    monkeypatch,
+):
+    window, backend = dynamic_window
+    _wait_initial_devices(window)
+    page = window.test_page
+    panel = page.diagnostics_panel
+    initial_output_count = page.output_combo.count()
+    initial_scan_count = backend.scan_count
+    backend.set_devices(
+        [
+            _device("out-a", "耳机 A"),
+            _device("out-b", "耳机 B"),
+            _device("out-c", "诊断期间插入的耳机"),
+            _device("in-a", "麦克风 A", output=False),
+        ]
+    )
+
+    with monkeypatch.context() as context:
+        context.setattr(
+            type(panel),
+            "is_running",
+            property(lambda _panel: True),
+        )
+        page._update_controls()
+        assert page.start_button.isEnabled() is False
+        assert page.refresh_button.isEnabled() is False
+        assert page.output_combo.isEnabled() is False
+        assert page.input_combo.isEnabled() is False
+        assert panel.stop_button.isEnabled() is True
+
+        page.start_test()
+        page.refresh_devices()
+        page._auto_refresh_devices()
+
+        assert page.controller.is_running is False
+        assert page.controller.records == ()
+        assert backend.scan_count == initial_scan_count
+        assert page.output_combo.count() == initial_output_count
+        assert page.selected_output_device_id() == "out-a"
+
+    page._on_diagnostics_finished()
+    assert _wait_for_signal(page.refresh_finished) is True
+    page._auto_refresh_timer.stop()
+
+    assert backend.scan_count == initial_scan_count + 1
+    assert page.output_combo.count() == initial_output_count + 1
+    assert page.selected_output_device_id() == "out-a"
+    assert page.start_button.isEnabled() is True

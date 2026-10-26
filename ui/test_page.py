@@ -35,6 +35,7 @@ from core.statistics_engine import SessionStatistics
 from core.test_controller import ControllerBusyError, SessionNotAvailableError, TestController
 from core.test_models import MeasurementRecord, TestSessionConfig, TestSessionSnapshot
 from core.test_state_machine import TestState
+from ui.diagnostics_panel import DiagnosticsPanel
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,8 @@ class TestPage(QWidget):
         self.controller = TestController(device_service, self)
         self._build_ui()
         self._connect_controller()
+        self.diagnostics_panel.start_requested.connect(self._start_diagnostics)
+        self.diagnostics_panel.finished.connect(self._on_diagnostics_finished)
         self.refresh_button.clicked.connect(self.refresh_devices)
         self.output_combo.currentIndexChanged.connect(self._on_device_selection_changed)
         self.input_combo.currentIndexChanged.connect(self._on_device_selection_changed)
@@ -325,6 +328,9 @@ class TestPage(QWidget):
             self.connection_type_combo,
         ]
         root_layout.addWidget(parameter_card)
+
+        self.diagnostics_panel = DiagnosticsPanel(self._device_service, parent=content)
+        root_layout.addWidget(self.diagnostics_panel)
 
         overview = QGroupBox("测量概览")
         overview_layout = QGridLayout(overview)
@@ -546,7 +552,7 @@ class TestPage(QWidget):
 
     def update_config(self, config: AppConfig) -> None:
         self._config = config
-        if self.controller.is_running:
+        if self.controller.is_running or self.diagnostics_panel.is_running:
             return
         self.test_count_spin.setValue(config.measurement.default_test_count)
         self.minimum_valid_count_spin.setMaximum(config.measurement.default_test_count)
@@ -559,7 +565,11 @@ class TestPage(QWidget):
         self._update_controls()
 
     def start_test(self) -> None:
-        if self.controller.is_running or self._refresh_thread is not None:
+        if (
+            self.controller.is_running
+            or self.diagnostics_panel.is_running
+            or self._refresh_thread is not None
+        ):
             return
         try:
             config = self.session_config()
@@ -576,6 +586,25 @@ class TestPage(QWidget):
 
     def stop_test(self) -> None:
         self.controller.request_stop()
+
+    def _start_diagnostics(self) -> None:
+        if (
+            self.controller.is_running
+            or self.diagnostics_panel.is_running
+            or self._refresh_thread is not None
+            or self._shutting_down
+        ):
+            return
+        try:
+            config = self.session_config()
+        except ValueError as exc:
+            self.diagnostics_panel.show_error(f"无法启动诊断：{exc}")
+            return
+        if self.diagnostics_panel.start(config):
+            self._auto_refresh_timer.stop()
+            self.error_label.hide()
+            self.status_message.emit("已开始 Loopback 诊断（单次、未补偿）")
+        self._update_controls()
 
     def clear_session(self) -> None:
         try:
@@ -596,7 +625,11 @@ class TestPage(QWidget):
         self._request_refresh(manual=False)
 
     def _request_refresh(self, *, manual: bool) -> None:
-        if self.controller.is_running or self._shutting_down:
+        if (
+            self.controller.is_running
+            or self.diagnostics_panel.is_running
+            or self._shutting_down
+        ):
             return
         if self._refresh_thread is not None:
             return
@@ -628,8 +661,13 @@ class TestPage(QWidget):
         thread.start()
 
     def _apply_devices(self, inventory: DeviceInventory) -> None:
-        if self._shutting_down or self.controller.is_running:
+        if (
+            self._shutting_down
+            or self.controller.is_running
+            or self.diagnostics_panel.is_running
+        ):
             return
+        self.diagnostics_panel.update_inventory(inventory)
         recovered_from_error = self._refresh_error_active
         self._refresh_error_active = False
         self._consecutive_refresh_failures = 0
@@ -797,7 +835,11 @@ class TestPage(QWidget):
             self._refresh_thread = None
             self._refresh_worker = None
             self._update_controls()
-            if not self._shutting_down and not self.controller.is_running:
+            if (
+                not self._shutting_down
+                and not self.controller.is_running
+                and not self.diagnostics_panel.is_running
+            ):
                 failure_exponent = min(max(self._consecutive_refresh_failures - 1, 0), 4)
                 delay_ms = min(
                     _AUTO_REFRESH_INTERVAL_MS * (2 ** failure_exponent),
@@ -1080,6 +1122,10 @@ class TestPage(QWidget):
         self._update_controls()
         self._auto_refresh_devices()
 
+    def _on_diagnostics_finished(self) -> None:
+        self._update_controls()
+        self._auto_refresh_devices()
+
     def _clear_results(self) -> None:
         for label in (*self.metric_value_labels, *self.compensated_metric_value_labels):
             label.setText("—")
@@ -1097,7 +1143,11 @@ class TestPage(QWidget):
 
     def _update_controls(self) -> None:
         active = self.controller.is_running
+        diagnostic_active = self.diagnostics_panel.is_running
         refreshing = self._refresh_thread is not None and self._refresh_thread.isRunning()
+        self.diagnostics_panel.set_external_busy(
+            active or refreshing or self._shutting_down
+        )
         has_output = self.output_combo.count() > 0 and self.selected_output_device_id() is not None
         has_input = self.input_combo.count() > 0 and self.selected_input_device_id() is not None
         has_output_choices = any(
@@ -1112,6 +1162,7 @@ class TestPage(QWidget):
             has_output
             and has_input
             and not active
+            and not diagnostic_active
             and not refreshing
             and not self.controller.save_pending
             and not self._shutting_down
@@ -1131,13 +1182,18 @@ class TestPage(QWidget):
             and snapshot is not None
             and bool(snapshot.records)
         )
-        self.refresh_button.setEnabled(not active and not refreshing and not self._shutting_down)
-        self.output_combo.setEnabled(has_output_choices and not active and not refreshing)
-        self.input_combo.setEnabled(has_input_choices and not active and not refreshing)
+        audio_busy = active or diagnostic_active
+        self.refresh_button.setEnabled(
+            not audio_busy and not refreshing and not self._shutting_down
+        )
+        self.output_combo.setEnabled(has_output_choices and not audio_busy)
+        self.input_combo.setEnabled(has_input_choices and not audio_busy)
         for widget in self._parameter_widgets:
-            widget.setEnabled(not active and not self._shutting_down)
+            widget.setEnabled(not audio_busy and not self._shutting_down)
         self.compensation_spin.setEnabled(
-            not active and not self._shutting_down and self.selected_calibration_profile() is None
+            not audio_busy
+            and not self._shutting_down
+            and self.selected_calibration_profile() is None
         )
 
     @staticmethod
@@ -1157,6 +1213,7 @@ class TestPage(QWidget):
             return
         self._shutting_down = True
         self._auto_refresh_timer.stop()
+        self.diagnostics_panel.shutdown()
         self.controller.shutdown()
         thread = self._refresh_thread
         if thread is not None and thread.isRunning():

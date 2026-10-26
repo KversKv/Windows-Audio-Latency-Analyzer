@@ -1,3 +1,4 @@
+import inspect
 import logging
 import os
 from abc import ABC, abstractmethod
@@ -34,6 +35,12 @@ class AudioDevice:
     @property
     def supports_output(self) -> bool:
         return self.max_output_channels > 0
+
+
+@dataclass(frozen=True, slots=True)
+class SoftwareLoopbackCapability:
+    supported: bool
+    detail: str
 
 
 @dataclass(slots=True)
@@ -103,6 +110,12 @@ class AudioBackend(ABC):
     @abstractmethod
     def list_devices(self) -> list[AudioDevice]:
         raise NotImplementedError
+
+    def software_loopback_capability(self) -> SoftwareLoopbackCapability:
+        return SoftwareLoopbackCapability(
+            supported=False,
+            detail="当前音频后端未提供真实 WASAPI Loopback Capture",
+        )
 
     @abstractmethod
     def open_output_stream(
@@ -270,6 +283,41 @@ class SoundDeviceBackend(AudioBackend):
             devices.append(self._to_audio_device(index, raw_device, host_apis))
         return devices
 
+    def software_loopback_capability(self) -> SoftwareLoopbackCapability:
+        if os.name != "nt":
+            return SoftwareLoopbackCapability(
+                supported=False,
+                detail="Software Loop 仅支持 Windows WASAPI，当前系统不可用",
+            )
+        try:
+            wasapi_settings = getattr(sd, "WasapiSettings", None)
+            has_loopback_binding = (
+                wasapi_settings is not None
+                and "loopback" in inspect.signature(wasapi_settings).parameters
+            )
+        except Exception as exc:
+            logger.warning("WASAPI Loopback 能力检测失败", exc_info=True)
+            return SoftwareLoopbackCapability(
+                supported=False,
+                detail=f"无法确认 WASAPI Loopback Capture 支持状态：{exc}",
+            )
+        # CFFI 缺失符号会抛 ffi.error，而不是 AttributeError。
+        try:
+            sd._lib.PaWasapi_IsLoopback
+        except Exception:
+            has_native_loopback = False
+        else:
+            has_native_loopback = True
+        if not has_loopback_binding or not has_native_loopback:
+            return SoftwareLoopbackCapability(
+                supported=False,
+                detail="当前 sounddevice / PortAudio 未提供完整的 WASAPI Loopback Capture 接口",
+            )
+        return SoftwareLoopbackCapability(
+            supported=False,
+            detail="当前后端尚未接入经验证的 WASAPI 回环采集与时间戳映射",
+        )
+
     def open_output_stream(
         self,
         *,
@@ -360,6 +408,12 @@ class SimulatedAudioBackend(AudioBackend):
 
     def list_devices(self) -> list[AudioDevice]:
         return list(self._devices)
+
+    def software_loopback_capability(self) -> SoftwareLoopbackCapability:
+        return SoftwareLoopbackCapability(
+            supported=False,
+            detail="离线模拟后端不提供真实 WASAPI Loopback Capture",
+        )
 
     def open_output_stream(
         self,

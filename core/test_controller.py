@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 
 import numpy as np
-from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
 
 from audio.audio_backend import AudioBackendError, AudioDevice
 from audio.audio_synchronizer import AudioSynchronizer, SampleTimeAnchor
@@ -564,7 +564,7 @@ class TestController(QObject):
         worker.measurement_ready.connect(self._append_measurement)
         worker.error_occurred.connect(self.error_occurred)
         worker.session_finished.connect(self._on_session_finished)
-        worker.finished.connect(thread.quit)
+        worker.finished.connect(thread.quit, Qt.ConnectionType.DirectConnection)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(self._on_thread_finished)
         thread.finished.connect(thread.deleteLater)
