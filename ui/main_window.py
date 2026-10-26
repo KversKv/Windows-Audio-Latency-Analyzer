@@ -196,12 +196,18 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"会话保存失败：{message}", 8000)
 
     def _on_device_selection_changed(self) -> None:
+        output_id = self.test_page.selected_output_device_id()
+        input_id = self.test_page.selected_input_device_id()
         self._config = replace(
             self._config,
             audio=replace(
                 self._config.audio,
-                output_device_id=self.test_page.selected_output_device_id(),
-                input_device_id=self.test_page.selected_input_device_id(),
+                output_device_id=(
+                    output_id if output_id is not None else self._config.audio.output_device_id
+                ),
+                input_device_id=(
+                    input_id if input_id is not None else self._config.audio.input_device_id
+                ),
             ),
         )
         self._sync_calibration_context()

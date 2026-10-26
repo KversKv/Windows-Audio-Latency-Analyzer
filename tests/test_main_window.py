@@ -9,13 +9,43 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from app.config import AppConfig, AudioConfig, ConfigManager
-from audio.audio_backend import SimulatedAudioBackend
+from audio.audio_backend import AudioBackendError, AudioDevice, SimulatedAudioBackend
 from audio.audio_device_manager import AudioDeviceManager
 from core.device_service import DeviceService
 from core.persistence_service import PersistenceService
 from core.test_state_machine import TestState as SessionState
 from ui.main_window import MainWindow
 from ui.styles import load_dark_theme
+
+
+class _DynamicAudioBackend(SimulatedAudioBackend):
+    def __init__(self, devices):
+        super().__init__(sample_rate=48000)
+        self._devices = list(devices)
+        self.scan_count = 0
+        self.failures_remaining = 0
+
+    def set_devices(self, devices):
+        self._devices = list(devices)
+
+    def list_devices(self):
+        self.scan_count += 1
+        if self.failures_remaining > 0:
+            self.failures_remaining -= 1
+            raise AudioBackendError("测试设备枚举失败")
+        return list(self._devices)
+
+
+def _device(identifier, name, *, output=True):
+    return AudioDevice(
+        identifier=identifier,
+        name=name,
+        host_api="测试 WASAPI",
+        max_input_channels=0 if output else 2,
+        max_output_channels=2 if output else 0,
+        default_sample_rate=48000.0,
+        is_simulation=True,
+    )
 
 
 @pytest.fixture
@@ -50,6 +80,31 @@ def main_window(qt_application, tmp_path):
     window.close()
     window.deleteLater()
     qt_application.processEvents()
+
+
+@pytest.fixture
+def dynamic_window(qt_application, tmp_path):
+    config = AppConfig(audio=AudioConfig(backend="simulation"))
+    config_manager = ConfigManager(tmp_path / "config.json")
+    backend = _DynamicAudioBackend(
+        [
+            _device("out-a", "耳机 A"),
+            _device("out-b", "耳机 B"),
+            _device("in-a", "麦克风 A", output=False),
+        ]
+    )
+    service = DeviceService(AudioDeviceManager(backend))
+    window = MainWindow(service, config_manager, config)
+    yield window, backend
+    window.shutdown()
+    window.close()
+    window.deleteLater()
+    qt_application.processEvents()
+
+
+def _wait_initial_devices(window):
+    assert _wait_for_signal(window.test_page.refresh_finished) is True
+    window.test_page._auto_refresh_timer.stop()
 
 
 def test_device_refresh_and_page_navigation(main_window):
@@ -307,3 +362,199 @@ def test_invalid_measurement_reason_is_visible(main_window):
     assert "延迟超出有效范围 × 1" in page.quality_summary_label.text()
     assert "有效样本不足最低要求的 1 次" in page.quality_summary_label.text()
     assert "有效样本不足最低要求的 1 次" in page.session_status_label.text()
+
+
+def test_manual_button_and_auto_refresh_apply_device_changes(dynamic_window):
+    window, backend = dynamic_window
+    _wait_initial_devices(window)
+    page = window.test_page
+
+    backend.set_devices(
+        [
+            _device("out-a", "耳机 A"),
+            _device("out-b", "耳机 B"),
+            _device("out-c", "新插入耳机"),
+            _device("in-a", "麦克风 A", output=False),
+        ]
+    )
+    page.refresh_button.click()
+    assert _wait_for_signal(page.refresh_finished) is True
+    page._auto_refresh_timer.stop()
+
+    assert page.output_combo.count() == 3
+    assert page.selected_output_device_id() == "out-a"
+    assert "新插入耳机" in page.output_combo.itemText(2)
+
+    backend.set_devices(
+        [
+            _device("out-a", "耳机 A"),
+            _device("out-b", "耳机 B"),
+            _device("out-c", "新插入耳机"),
+            _device("in-a", "麦克风 A", output=False),
+            _device("in-b", "新插入麦克风", output=False),
+        ]
+    )
+    page._auto_refresh_devices()
+    assert _wait_for_signal(page.refresh_finished) is True
+    page._auto_refresh_timer.stop()
+
+    assert page.input_combo.count() == 2
+    assert page.selected_input_device_id() == "in-a"
+    assert "新插入麦克风" in page.input_combo.itemText(1)
+
+
+def test_unchanged_auto_refresh_is_silent_and_single_flight(dynamic_window):
+    window, backend = dynamic_window
+    _wait_initial_devices(window)
+    page = window.test_page
+    refreshed = []
+    selection_changes = []
+    model_events = []
+    page.devices_refreshed.connect(refreshed.append)
+    page.device_selection_changed.connect(selection_changes.append)
+    model = page.output_combo.model()
+    model.rowsInserted.connect(lambda *args: model_events.append(args))
+    model.rowsRemoved.connect(lambda *args: model_events.append(args))
+    previous_scan_count = backend.scan_count
+
+    page._auto_refresh_devices()
+    page._auto_refresh_devices()
+    assert _wait_for_signal(page.refresh_finished) is True
+    page._auto_refresh_timer.stop()
+
+    assert backend.scan_count == previous_scan_count + 1
+    assert refreshed == []
+    assert selection_changes == []
+    assert model_events == []
+
+    page.refresh_button.click()
+    assert _wait_for_signal(page.refresh_finished) is True
+    assert len(refreshed) == 1
+    assert selection_changes == []
+    assert model_events == []
+
+    assert page._auto_refresh_timer.isActive() is True
+    window.shutdown()
+    assert page._auto_refresh_timer.isActive() is False
+
+
+def test_auto_refresh_tracks_device_when_portaudio_id_changes(dynamic_window):
+    window, backend = dynamic_window
+    _wait_initial_devices(window)
+    page = window.test_page
+    backend.set_devices(
+        [
+            _device("out-a", "耳机 B"),
+            _device("out-a-reindexed", "耳机 A"),
+            _device("in-a", "麦克风 A", output=False),
+        ]
+    )
+
+    page._auto_refresh_devices()
+    assert _wait_for_signal(page.refresh_finished) is True
+    page._auto_refresh_timer.stop()
+
+    assert page.selected_output_device_id() == "out-a-reindexed"
+    assert "耳机 A" in page.output_combo.currentText()
+    assert window.current_config().audio.output_device_id == "out-a-reindexed"
+
+
+def test_selected_device_removal_and_unique_reinsertion(dynamic_window):
+    window, backend = dynamic_window
+    _wait_initial_devices(window)
+    page = window.test_page
+    backend.set_devices(
+        [
+            _device("out-b", "耳机 B"),
+            _device("in-a", "麦克风 A", output=False),
+        ]
+    )
+
+    page._auto_refresh_devices()
+    assert _wait_for_signal(page.refresh_finished) is True
+    page._auto_refresh_timer.stop()
+
+    assert page.selected_output_device_id() is None
+    assert "原设备不可用" in page.output_combo.currentText()
+    assert page.output_combo.isEnabled() is True
+    assert page.start_button.isEnabled() is False
+    assert window.current_config().audio.output_device_id == "out-a"
+
+    backend.set_devices(
+        [
+            _device("out-b", "耳机 B"),
+            _device("out-a-reconnected", "耳机 A"),
+            _device("in-a", "麦克风 A", output=False),
+        ]
+    )
+    page._auto_refresh_devices()
+    assert _wait_for_signal(page.refresh_finished) is True
+    page._auto_refresh_timer.stop()
+
+    assert page.selected_output_device_id() == "out-a-reconnected"
+    assert page.start_button.isEnabled() is True
+    assert window.current_config().audio.output_device_id == "out-a-reconnected"
+
+
+def test_auto_refresh_failure_backoff_and_recovery(dynamic_window):
+    window, backend = dynamic_window
+    _wait_initial_devices(window)
+    page = window.test_page
+    refresh_errors = []
+    refreshed = []
+    page.refresh_failed.connect(refresh_errors.append)
+    page.devices_refreshed.connect(refreshed.append)
+    backend.failures_remaining = 6
+
+    for expected_delay in (2000, 4000, 8000, 16000, 30000, 30000):
+        page._auto_refresh_devices()
+        assert _wait_for_signal(page.refresh_finished) is True
+        assert page._auto_refresh_timer.interval() == expected_delay
+        page._auto_refresh_timer.stop()
+
+    assert len(refresh_errors) == 1
+    assert refreshed == []
+    assert page.output_combo.count() == 2
+
+    page._auto_refresh_devices()
+    assert _wait_for_signal(page.refresh_finished) is True
+    page._auto_refresh_timer.stop()
+
+    assert page._auto_refresh_timer.interval() == 2000
+    assert len(refreshed) == 1
+    assert "设备刷新失败" not in page.device_status_label.text()
+
+
+def test_auto_refresh_defers_while_controller_is_active(dynamic_window, monkeypatch):
+    window, backend = dynamic_window
+    _wait_initial_devices(window)
+    page = window.test_page
+    initial_output_count = page.output_combo.count()
+    initial_scan_count = backend.scan_count
+    backend.set_devices(
+        [
+            _device("out-a", "耳机 A"),
+            _device("out-b", "耳机 B"),
+            _device("out-c", "测量期间插入的耳机"),
+            _device("in-a", "麦克风 A", output=False),
+        ]
+    )
+
+    with monkeypatch.context() as context:
+        context.setattr(
+            type(page.controller),
+            "is_running",
+            property(lambda _controller: True),
+        )
+        page._auto_refresh_devices()
+        assert backend.scan_count == initial_scan_count
+        assert page.output_combo.count() == initial_output_count
+        assert page.selected_output_device_id() == "out-a"
+
+    page._on_controller_finished()
+    assert _wait_for_signal(page.refresh_finished) is True
+    page._auto_refresh_timer.stop()
+
+    assert backend.scan_count == initial_scan_count + 1
+    assert page.output_combo.count() == initial_output_count + 1
+    assert page.selected_output_device_id() == "out-a"

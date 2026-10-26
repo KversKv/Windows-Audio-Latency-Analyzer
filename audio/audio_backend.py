@@ -10,6 +10,8 @@ import sounddevice as sd
 
 logger = logging.getLogger(__name__)
 
+_PA_INTERNAL_ERROR = -9986
+
 
 class AudioBackendError(RuntimeError):
     pass
@@ -236,17 +238,29 @@ class SoundDeviceBackend(AudioBackend):
 
     def list_devices(self) -> list[AudioDevice]:
         try:
-            raw_devices = sd.query_devices()
+            device_list_refreshed = sd._initialized <= 0
+            if device_list_refreshed:
+                sd._initialize()
             host_apis = sd.query_hostapis()
+            wasapi_indices = {
+                index
+                for index, host_api in enumerate(host_apis)
+                if "wasapi" in str(host_api["name"]).lower()
+            }
+            if os.name == "nt" and wasapi_indices and not device_list_refreshed:
+                update_result = sd._lib.PaWasapi_UpdateDeviceList()
+                if update_result == _PA_INTERNAL_ERROR:
+                    # 默认 PortAudio 构建禁用动态 WASAPI 设备表，只能在空闲时重建。
+                    if sd._initialized > 0:
+                        sd._terminate()
+                    sd._initialize()
+                else:
+                    sd._check(update_result, "无法更新 WASAPI 设备列表")
+            raw_devices = sd.query_devices()
         except Exception as exc:
             logger.error("PortAudio 设备枚举失败", exc_info=True)
             raise AudioBackendError(f"无法访问 PortAudio：{exc}") from exc
 
-        wasapi_indices = {
-            index
-            for index, host_api in enumerate(host_apis)
-            if "wasapi" in str(host_api["name"]).lower()
-        }
         use_wasapi_only = os.name == "nt" and bool(wasapi_indices)
         devices: list[AudioDevice] = []
         for index, raw_device in enumerate(raw_devices):

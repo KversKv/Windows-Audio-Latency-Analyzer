@@ -3,7 +3,7 @@ from dataclasses import replace
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -39,6 +39,9 @@ from core.test_state_machine import TestState
 logger = logging.getLogger(__name__)
 
 _DEVICE_NAME_ROLE = Qt.ItemDataRole.UserRole + 1
+_AUTO_REFRESH_INTERVAL_MS = 2000
+_AUTO_REFRESH_MAX_INTERVAL_MS = 30000
+_DEVICE_UNAVAILABLE_TEXT = "原设备不可用或无法唯一识别，请重新选择"
 
 _STATE_LABELS = {
     TestState.IDLE: "空闲",
@@ -108,6 +111,15 @@ class TestPage(QWidget):
         self._session_sample_rate = config.audio.sample_rate
         self._preferred_output_id = config.audio.output_device_id
         self._preferred_input_id = config.audio.input_device_id
+        self._preferred_output_device: AudioDevice | None = None
+        self._preferred_input_device: AudioDevice | None = None
+        self._last_inventory: DeviceInventory | None = None
+        self._refresh_is_manual = True
+        self._refresh_error_active = False
+        self._consecutive_refresh_failures = 0
+        self._auto_refresh_timer = QTimer(self)
+        self._auto_refresh_timer.setSingleShot(True)
+        self._auto_refresh_timer.timeout.connect(self._auto_refresh_devices)
         self.controller = TestController(device_service, self)
         self._build_ui()
         self._connect_controller()
@@ -547,7 +559,7 @@ class TestPage(QWidget):
         self._update_controls()
 
     def start_test(self) -> None:
-        if self.controller.is_running:
+        if self.controller.is_running or self._refresh_thread is not None:
             return
         try:
             config = self.session_config()
@@ -556,6 +568,7 @@ class TestPage(QWidget):
         except (ControllerBusyError, ValueError) as exc:
             self._on_error(str(exc))
             return
+        self._auto_refresh_timer.stop()
         self._session_sample_rate = config.audio.sample_rate
         self.error_label.hide()
         self.audio_parameters_changed.emit(config.audio.sample_rate, config.audio.sample_rate)
@@ -577,10 +590,17 @@ class TestPage(QWidget):
             self._on_error(str(exc))
 
     def refresh_devices(self) -> None:
+        self._request_refresh(manual=True)
+
+    def _auto_refresh_devices(self) -> None:
+        self._request_refresh(manual=False)
+
+    def _request_refresh(self, *, manual: bool) -> None:
         if self.controller.is_running or self._shutting_down:
             return
-        if self._refresh_thread is not None and self._refresh_thread.isRunning():
+        if self._refresh_thread is not None:
             return
+        self._auto_refresh_timer.stop()
         current_output = self.selected_output_device_id()
         current_input = self.selected_input_device_id()
         if current_output is not None:
@@ -588,8 +608,10 @@ class TestPage(QWidget):
         if current_input is not None:
             self._preferred_input_id = current_input
 
+        self._refresh_is_manual = manual
         self.refresh_button.setEnabled(False)
-        self.device_status_label.setText("正在读取音频设备…")
+        if manual:
+            self.device_status_label.setText("正在读取音频设备…")
         self._update_controls()
         thread = QThread(self)
         worker = DeviceEnumerationWorker(self._device_service)
@@ -606,23 +628,45 @@ class TestPage(QWidget):
         thread.start()
 
     def _apply_devices(self, inventory: DeviceInventory) -> None:
-        self._loading_devices = True
-        self._populate_combo(
-            self.output_combo,
-            inventory.output_devices,
-            self._preferred_output_id,
-            "未检测到播放设备",
-            is_output=True,
+        if self._shutting_down or self.controller.is_running:
+            return
+        recovered_from_error = self._refresh_error_active
+        self._refresh_error_active = False
+        self._consecutive_refresh_failures = 0
+        inventory_changed = inventory != self._last_inventory
+        previous_selection = (
+            self.selected_output_device_id(),
+            self.selected_input_device_id(),
         )
-        self._populate_combo(
-            self.input_combo,
-            inventory.input_devices,
-            self._preferred_input_id,
-            "未检测到录音设备",
-            is_output=False,
-        )
-        self._loading_devices = False
-        self._reload_calibration_profiles()
+        if inventory_changed:
+            self._loading_devices = True
+            try:
+                selected_output = self._populate_combo(
+                    self.output_combo,
+                    inventory.output_devices,
+                    self._preferred_output_id,
+                    self._preferred_output_device,
+                    "未检测到播放设备",
+                    is_output=True,
+                )
+                selected_input = self._populate_combo(
+                    self.input_combo,
+                    inventory.input_devices,
+                    self._preferred_input_id,
+                    self._preferred_input_device,
+                    "未检测到录音设备",
+                    is_output=False,
+                )
+            finally:
+                self._loading_devices = False
+            if selected_output is not None:
+                self._preferred_output_id = selected_output.identifier
+                self._preferred_output_device = selected_output
+            if selected_input is not None:
+                self._preferred_input_id = selected_input.identifier
+                self._preferred_input_device = selected_input
+            self._last_inventory = inventory
+            self._reload_calibration_profiles()
 
         self.backend_label.setText("离线模拟" if inventory.is_simulation else "真实音频设备")
         self.simulation_label.setVisible(inventory.is_simulation)
@@ -637,8 +681,14 @@ class TestPage(QWidget):
             f"{inventory.backend_name} · 检测到 {len(inventory.output_devices)} 个播放设备、"
             f"{len(inventory.input_devices)} 个录音设备"
         )
-        self.devices_refreshed.emit(inventory)
-        self.device_selection_changed.emit()
+        if inventory_changed or self._refresh_is_manual or recovered_from_error:
+            self.devices_refreshed.emit(inventory)
+        current_selection = (
+            self.selected_output_device_id(),
+            self.selected_input_device_id(),
+        )
+        if inventory_changed and current_selection != previous_selection:
+            self.device_selection_changed.emit()
         self._update_controls()
 
     def _populate_combo(
@@ -646,14 +696,15 @@ class TestPage(QWidget):
         combo: QComboBox,
         devices: tuple[AudioDevice, ...],
         preferred_id: int | str | None,
+        preferred_device: AudioDevice | None,
         empty_text: str,
         is_output: bool,
-    ) -> None:
+    ) -> AudioDevice | None:
         combo.clear()
         if not devices:
             combo.addItem(empty_text, None)
             combo.setEnabled(False)
-            return
+            return None
         combo.setEnabled(True)
         for device in devices:
             combo.addItem(self._device_text(device, is_output), device.identifier)
@@ -663,8 +714,63 @@ class TestPage(QWidget):
                 f"主机 API：{device.host_api}",
                 Qt.ItemDataRole.ToolTipRole,
             )
-        preferred_index = combo.findData(preferred_id)
-        combo.setCurrentIndex(preferred_index if preferred_index >= 0 else 0)
+        preferred_index = self._preferred_device_index(
+            devices,
+            preferred_id,
+            preferred_device,
+        )
+        if preferred_index < 0 and (preferred_id is not None or preferred_device is not None):
+            combo.insertItem(0, _DEVICE_UNAVAILABLE_TEXT, None)
+            combo.setCurrentIndex(0)
+            return None
+        selected_index = preferred_index if preferred_index >= 0 else 0
+        combo.setCurrentIndex(selected_index)
+        return devices[selected_index]
+
+    def _preferred_device_index(
+        self,
+        devices: tuple[AudioDevice, ...],
+        preferred_id: int | str | None,
+        preferred_device: AudioDevice | None,
+    ) -> int:
+        if preferred_device is not None:
+            for index, device in enumerate(devices):
+                if device.identifier == preferred_id and self._device_matches(
+                    device, preferred_device
+                ):
+                    return index
+            matches = [
+                index
+                for index, device in enumerate(devices)
+                if self._device_matches(device, preferred_device)
+            ]
+            return matches[0] if len(matches) == 1 else -1
+        if preferred_id is not None:
+            return next(
+                (
+                    index
+                    for index, device in enumerate(devices)
+                    if device.identifier == preferred_id
+                ),
+                -1,
+            )
+        return -1
+
+    @staticmethod
+    def _device_matches(left: AudioDevice, right: AudioDevice) -> bool:
+        return (
+            left.name,
+            left.host_api,
+            left.max_input_channels,
+            left.max_output_channels,
+            left.is_simulation,
+        ) == (
+            right.name,
+            right.host_api,
+            right.max_input_channels,
+            right.max_output_channels,
+            right.is_simulation,
+        )
 
     @staticmethod
     def _device_text(device: AudioDevice, is_output: bool) -> str:
@@ -677,21 +783,57 @@ class TestPage(QWidget):
         return f"{device.name}  |  ID {device.identifier} · {sample_rate} · {channels} 声道"
 
     def _show_refresh_error(self, message: str) -> None:
+        if self._shutting_down:
+            return
+        self._consecutive_refresh_failures += 1
+        was_error_active = self._refresh_error_active
+        self._refresh_error_active = True
         self.device_status_label.setText(f"设备刷新失败：{message}")
-        self.refresh_failed.emit(message)
+        if self._refresh_is_manual or not was_error_active:
+            self.refresh_failed.emit(message)
 
     def _on_refresh_thread_finished(self) -> None:
         if self.sender() is self._refresh_thread:
             self._refresh_thread = None
             self._refresh_worker = None
             self._update_controls()
+            if not self._shutting_down and not self.controller.is_running:
+                failure_exponent = min(max(self._consecutive_refresh_failures - 1, 0), 4)
+                delay_ms = min(
+                    _AUTO_REFRESH_INTERVAL_MS * (2 ** failure_exponent),
+                    _AUTO_REFRESH_MAX_INTERVAL_MS,
+                )
+                self._auto_refresh_timer.start(delay_ms)
             self.refresh_finished.emit()
 
     def _on_device_selection_changed(self) -> None:
         if self._loading_devices:
             return
-        self._preferred_output_id = self.selected_output_device_id()
-        self._preferred_input_id = self.selected_input_device_id()
+        if self._last_inventory is not None:
+            output_id = self.selected_output_device_id()
+            input_id = self.selected_input_device_id()
+            output_device = next(
+                (
+                    device
+                    for device in self._last_inventory.output_devices
+                    if device.identifier == output_id
+                ),
+                None,
+            )
+            input_device = next(
+                (
+                    device
+                    for device in self._last_inventory.input_devices
+                    if device.identifier == input_id
+                ),
+                None,
+            )
+            if output_device is not None:
+                self._preferred_output_id = output_device.identifier
+                self._preferred_output_device = output_device
+            if input_device is not None:
+                self._preferred_input_id = input_device.identifier
+                self._preferred_input_device = input_device
         self._reload_calibration_profiles()
         self.device_selection_changed.emit()
         self._update_controls()
@@ -936,6 +1078,7 @@ class TestPage(QWidget):
     def _on_controller_finished(self) -> None:
         self._stop_requested = False
         self._update_controls()
+        self._auto_refresh_devices()
 
     def _clear_results(self) -> None:
         for label in (*self.metric_value_labels, *self.compensated_metric_value_labels):
@@ -957,6 +1100,14 @@ class TestPage(QWidget):
         refreshing = self._refresh_thread is not None and self._refresh_thread.isRunning()
         has_output = self.output_combo.count() > 0 and self.selected_output_device_id() is not None
         has_input = self.input_combo.count() > 0 and self.selected_input_device_id() is not None
+        has_output_choices = any(
+            self.output_combo.itemData(index) is not None
+            for index in range(self.output_combo.count())
+        )
+        has_input_choices = any(
+            self.input_combo.itemData(index) is not None
+            for index in range(self.input_combo.count())
+        )
         can_start = (
             has_output
             and has_input
@@ -981,8 +1132,8 @@ class TestPage(QWidget):
             and bool(snapshot.records)
         )
         self.refresh_button.setEnabled(not active and not refreshing and not self._shutting_down)
-        self.output_combo.setEnabled(has_output and not active and not refreshing)
-        self.input_combo.setEnabled(has_input and not active and not refreshing)
+        self.output_combo.setEnabled(has_output_choices and not active and not refreshing)
+        self.input_combo.setEnabled(has_input_choices and not active and not refreshing)
         for widget in self._parameter_widgets:
             widget.setEnabled(not active and not self._shutting_down)
         self.compensation_spin.setEnabled(
@@ -1005,6 +1156,7 @@ class TestPage(QWidget):
         if self._shutting_down:
             return
         self._shutting_down = True
+        self._auto_refresh_timer.stop()
         self.controller.shutdown()
         thread = self._refresh_thread
         if thread is not None and thread.isRunning():

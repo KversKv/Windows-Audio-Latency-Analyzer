@@ -2,7 +2,7 @@
 
 ## P1 已实现接口
 
-- `audio_backend.py`：唯一 sounddevice 入口。`AudioBackend` 定义设备枚举及独立输入/输出开流；`AudioStream` 定义启动、停止、关闭和健康状态。后端将 PortAudio 回调参数映射为 `AudioCallbackTime` / `AudioStreamStatus`，后端异常转为 `AudioBackendError`。
+- `audio_backend.py`：唯一 sounddevice 入口。`AudioBackend` 定义设备枚举及独立输入/输出开流；Windows/WASAPI 枚举先经 `PaWasapi_UpdateDeviceList` 更新原生设备表。默认 PortAudio 构建未启用动态设备表时该接口返回 `-9986`，后端仅在无活动流、扫描单飞且未开始测量时通过 sounddevice 终止并重新初始化 PortAudio 作为兼容回退；禁止在活动会话中重启 PortAudio。`AudioStream` 定义启动、停止、关闭和健康状态。后端将 PortAudio 回调参数映射为 `AudioCallbackTime` / `AudioStreamStatus`，后端异常转为 `AudioBackendError`。
 - `playback_engine.py`：整个会话只打开并启动一次播放流。背景音连续输出，`schedule_stimulus()` 使用绝对 `start_sample`；重叠或已过期的调度会被拒绝，错过回调位置会记录错误而不是伪造播放时间。
 - `capture_engine.py`：独立输入流连续采集到 `AudioRingBuffer`，控制线程读取样本。输入溢出、缓冲丢帧和意外停流通过 `check_health()` 报告。
 - `background_generator.py`：初始化时预生成确定性的带限噪声或粉红噪声，回调仅拷贝循环缓冲；默认配置集中在 `app.config.AudioConfig`。
@@ -12,7 +12,7 @@
 
 - 正常回调不执行日志、磁盘 IO、UI、数据库或数值分析；Ring Buffer 在回调侧以非阻塞方式取锁，冲突帧计入丢弃计数。
 - `open()` 与 `start()` 分离；正式调度要求播放流运行且完成 1–15 秒预热。`close()` 幂等，停止并释放流。
-- 引擎不自动重连。设备断开或音频状态错误后，由上层安全关闭并创建新会话，避免沿用不连续样本时间轴。
+- 引擎不自动重连。设备断开或音频状态错误后，由上层安全关闭并创建新会话，避免沿用不连续样本时间轴；设备表自动刷新只在非活动会话中经后台 Worker 执行，会话收尾后再补扫，不得换设备续测。
 - 连续流、预热和非零背景音是测试条件，不代表完全消除蓝牙低功耗行为。
 
 ## 诊断与边界

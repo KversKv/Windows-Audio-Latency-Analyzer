@@ -14,3 +14,9 @@
 
 - `PlotCurveItem` 与 `Qt.OpenGLHelpers` 在导入阶段就加载 `QtOpenGL` / `QtOpenGLWidgets`；即使图表使用光栅渲染，排除这些 Python 绑定也会导致启动失败。
 - 未启用 OpenGL 时可以过滤 `opengl32sw.dll` 软件渲染后端；后续若启用 pyqtgraph OpenGL 加速，必须同时移除该过滤。
+
+## sounddevice 自带 PortAudio 的 WASAPI 热插拔更新限制
+
+- **现象：** `PaWasapi_UpdateDeviceList` 符号存在，但调用固定返回 `paInternalError (-9986)`；monkeypatch 单元测试无法发现该真实兼容性问题。
+- **原因：** sounddevice 0.5.6 随附的 PortAudio V19.7.0 使用默认构建，`PA_WASAPI_MAX_CONST_DEVICE_COUNT=0`，对应源码直接返回 `paInternalError`。
+- **正确做法：** 优先调用专用更新接口；仅对 `-9986` 在无活动流、扫描单飞且未开始测量时通过 `sd._terminate()` / `sd._initialize()` 重建设备表，其他错误仍明确失败。必须执行真实 `python -m app.audio_diagnostic --list-devices` 与 Qt 后台线程冒烟，活动会话中禁止重建。
