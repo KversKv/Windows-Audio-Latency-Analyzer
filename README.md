@@ -22,7 +22,7 @@ P0–P6 已完成。P7 的自动化集成回归、真实 WASAPI 连续流诊断�
 |---|---|
 | 语言 | Python 3.12+ |
 | UI | PySide6 (Qt Widgets) + pyqtgraph |
-| 音频 | sounddevice / PortAudio（优先 WASAPI 共享模式） |
+| 音频 | sounddevice / PortAudio（优先 WASAPI 共享模式）；PyAudioWPatch（Software Loop 数字环回） |
 | 数值计算 | NumPy / SciPy |
 | 持久化 | SQLite |
 | 打包 | PyInstaller |

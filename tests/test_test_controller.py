@@ -16,8 +16,10 @@ from audio.audio_backend import (
     AudioDevice,
     AudioStream,
     AudioStreamStatus,
+    SoftwareLoopbackCapability,
 )
 from audio.audio_device_manager import AudioDeviceManager
+from core import test_controller as controller_module
 from core.calibration_manager import CalibrationManager
 from core.device_service import DeviceService
 from core.test_controller import TestController as SessionController
@@ -95,13 +97,16 @@ def _session_config(
     calibration_profile=None,
     output_device_name="",
     input_device_name="",
+    diagnostic_mode=None,
 ):
     simulated = backend == "simulation"
     audio = AudioConfig(
         backend=backend,
         sample_rate=48000,
         output_device_id="sim-output" if simulated else 1,
-        input_device_id="sim-input" if simulated else 2,
+        input_device_id=(
+            None if diagnostic_mode == "software" else "sim-input" if simulated else 2
+        ),
         blocksize=240,
         background_amplitude=0.001,
         capture_buffer_seconds=2.0,
@@ -122,6 +127,7 @@ def _session_config(
         calibration_profile=calibration_profile,
         output_device_name=output_device_name,
         input_device_name=input_device_name,
+        diagnostic_mode=diagnostic_mode,
     )
 
 
@@ -163,10 +169,19 @@ class _FakeStream(AudioStream):
 class _FakeDuplexBackend(AudioBackend):
     display_name = "确定性测试双工后端"
 
-    def __init__(self, sample_rate=48000, delay_frames=480, block_frames=240):
+    def __init__(
+        self,
+        sample_rate=48000,
+        delay_frames=480,
+        block_frames=240,
+        clock_domain=None,
+    ):
         self.sample_rate = sample_rate
         self.delay_frames = delay_frames
         self.block_frames = block_frames
+        self.clock_domain = clock_domain
+        self.capture_clock_domain = clock_domain
+        self.closed = False
         self.output_stream = None
         self.input_stream = None
         self.output_open_count = 0
@@ -188,6 +203,9 @@ class _FakeDuplexBackend(AudioBackend):
     def list_devices(self):
         return list(self._devices)
 
+    def close(self):
+        self.closed = True
+
     def open_output_stream(self, **kwargs):
         self.output_open_count += 1
         self.output_stream = _FakeStream(self, kwargs["callback"], True)
@@ -195,6 +213,7 @@ class _FakeDuplexBackend(AudioBackend):
 
     def open_input_stream(self, **kwargs):
         self.input_open_count += 1
+        self.input_device_id = kwargs["device_id"]
         self.input_stream = _FakeStream(self, kwargs["callback"], False)
         return self.input_stream
 
@@ -219,6 +238,7 @@ class _FakeDuplexBackend(AudioBackend):
         output_time = AudioCallbackTime(
             current_time=100.0 + self.output_frames / self.sample_rate - 0.001,
             output_buffer_dac_time=100.0 + self.output_frames / self.sample_rate,
+            clock_domain=self.clock_domain,
         )
         self.output_stream.callback(output, frames, output_time, output_status)
         indices = self.output_frames + np.arange(frames)
@@ -241,6 +261,7 @@ class _FakeDuplexBackend(AudioBackend):
         input_time = AudioCallbackTime(
             current_time=100.0 + self.input_frames / self.sample_rate,
             input_buffer_adc_time=100.0 + self.input_frames / self.sample_rate,
+            clock_domain=self.capture_clock_domain,
         )
         self.input_stream.callback(captured, frames, input_time, input_status)
         self.input_frames += frames
@@ -375,6 +396,113 @@ def test_real_stream_controller_measures_known_delay_without_reopening(controlle
         assert record.captured.size > record.reference.size
 
 
+def _software_controller(controller_factory, monkeypatch):
+    service_backend = _FakeDuplexBackend()
+    service_backend._devices = [
+        AudioDevice(1, "测试播放设备", "Windows WASAPI", 0, 1, 48000.0)
+    ]
+    software_backend = _FakeDuplexBackend(clock_domain="shared-wasapi-clock")
+    monkeypatch.setattr(
+        controller_module,
+        "PyAudioWPatchBackend",
+        lambda output_device: software_backend,
+    )
+    controller = controller_factory(DeviceService(AudioDeviceManager(service_backend)))
+    return controller, service_backend, software_backend
+
+
+def test_software_loopback_measures_known_delay_with_shared_clock(
+    controller_factory,
+    monkeypatch,
+):
+    controller, service_backend, software_backend = _software_controller(
+        controller_factory,
+        monkeypatch,
+    )
+    timer = QTimer()
+    timer.setInterval(5)
+    timer.timeout.connect(software_backend.pump)
+    timer.start()
+    try:
+        controller.start(
+            _session_config(
+                backend="sounddevice",
+                test_count=1,
+                max_latency_ms=50.0,
+                output_device_name="测试播放设备",
+                diagnostic_mode="software",
+            )
+        )
+        assert _wait_for_signal(controller.finished, 10000) is True
+    finally:
+        timer.stop()
+
+    assert controller.state == SessionState.COMPLETED
+    assert service_backend.output_open_count == service_backend.input_open_count == 0
+    assert software_backend.output_open_count == software_backend.input_open_count == 1
+    assert software_backend.output_stream.start_count == software_backend.input_stream.start_count == 1
+    assert software_backend.input_device_id is None
+    assert software_backend.output_stream.is_closed and software_backend.input_stream.is_closed
+    assert software_backend.closed is True
+    record = controller.snapshot.records[0]
+    assert record.measurement.is_valid is True
+    assert record.measurement.raw_latency_ms == pytest.approx(10.0, abs=0.1)
+    assert record.measurement.timing_basis == "wasapi_digital_loopback_stream_timestamps"
+    assert "capture_clock_offset_uncalibrated" not in record.measurement.timing_limitations
+
+
+@pytest.mark.parametrize(
+    ("capture_domain", "expected_reason"),
+    [
+        ("different-clock", "software_clock_domain_mismatch"),
+        (None, "software_clock_domain_missing"),
+    ],
+)
+def test_software_loopback_rejects_unverified_clock_domain(
+    controller_factory,
+    monkeypatch,
+    capture_domain,
+    expected_reason,
+):
+    controller, _, software_backend = _software_controller(controller_factory, monkeypatch)
+    software_backend.capture_clock_domain = capture_domain
+    timer = QTimer()
+    timer.setInterval(5)
+    timer.timeout.connect(software_backend.pump)
+    timer.start()
+    try:
+        controller.start(
+            _session_config(
+                backend="sounddevice",
+                test_count=1,
+                max_latency_ms=50.0,
+                diagnostic_mode="software",
+            )
+        )
+        assert _wait_for_signal(controller.finished, 10000) is True
+    finally:
+        timer.stop()
+
+    assert controller.state == SessionState.COMPLETED
+    record = controller.snapshot.records[0]
+    assert record.captured.size > 0
+    assert record.measurement.is_valid is False
+    assert record.measurement.raw_latency_ms is None
+    assert record.measurement.compensated_latency_ms is None
+    assert expected_reason in record.measurement.invalid_reason
+    assert record.measurement.timing_basis == "wasapi_digital_loopback_timestamps_unavailable"
+    assert software_backend.closed is True
+
+
+def test_software_loopback_never_uses_offline_simulation(controller_factory):
+    controller = controller_factory(_simulated_service())
+    controller.start(_session_config(test_count=1, diagnostic_mode="software"))
+
+    assert _wait_for_signal(controller.finished) is True
+    assert controller.state == SessionState.DEVICE_ERROR
+    assert controller.records == ()
+
+
 def test_stop_closes_streams_and_preserves_completed_records(controller_factory):
     backend = _FakeDuplexBackend()
     controller = controller_factory(DeviceService(AudioDeviceManager(backend)))
@@ -503,6 +631,46 @@ def test_unexpected_output_stop_closes_resources(controller_factory):
     assert any("播放流已意外停止" in error for error in errors)
 
 
+def test_software_diagnostics_requires_output_but_no_input_device(
+    diagnostics_panel_factory,
+    monkeypatch,
+):
+    backend = _FakeDuplexBackend()
+    backend._devices = [AudioDevice(1, "仅输出耳机", "Windows WASAPI", 0, 1, 48000.0)]
+    monkeypatch.setattr(
+        backend,
+        "software_loopback_capability",
+        lambda: SoftwareLoopbackCapability(True, "测试环回可用"),
+    )
+    service = DeviceService(AudioDeviceManager(backend))
+    panel = diagnostics_panel_factory(service)
+    panel.update_inventory(service.scan())
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData(DiagnosticMode.SOFTWARE))
+    started = []
+    monkeypatch.setattr(panel.controller, "start", started.append)
+
+    assert panel.start_button.isEnabled() is True
+    assert panel.start(
+        _session_config(
+            backend="sounddevice",
+            test_count=1,
+            output_device_name="仅输出耳机",
+            input_device_name="不应保留的麦克风",
+            diagnostic_mode="software",
+        )
+    ) is True
+
+    config = panel.config_for(DiagnosticMode.SOFTWARE)
+    assert config is not None
+    assert config.audio.input_device_id is None
+    assert config.input_device_name == ""
+    assert config.diagnostic_mode == "software"
+    assert "WASAPI 数字环回" in panel.config_label.text()
+    assert "麦克风" not in panel.config_label.text()
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData(DiagnosticMode.ELECTRICAL))
+    assert "未检测到可用采集设备" in panel.support_label.text()
+
+
 def test_diagnostics_panel_measures_real_modes_and_isolates_results(
     diagnostics_panel_factory,
 ):
@@ -572,6 +740,7 @@ def test_diagnostics_panel_measures_real_modes_and_isolates_results(
         assert electrical_config.measurement.minimum_valid_count == 1
         assert electrical_config.compensation_ms == 0.0
         assert electrical_config.calibration_profile is None
+        assert electrical_config.diagnostic_mode == "electrical"
         assert backend.output_open_count == backend.input_open_count == 1
         assert first_output_stream.start_count == first_input_stream.start_count == 1
         assert first_output_stream.is_closed and first_input_stream.is_closed
@@ -596,6 +765,7 @@ def test_diagnostics_panel_measures_real_modes_and_isolates_results(
         assert acoustic_config.measurement.default_test_count == 1
         assert acoustic_config.compensation_ms == 0.0
         assert acoustic_config.calibration_profile is None
+        assert acoustic_config.diagnostic_mode == "acoustic"
         assert backend.output_open_count == backend.input_open_count == 2
         assert backend.output_stream.start_count == backend.input_stream.start_count == 1
         assert backend.output_stream.is_closed and backend.input_stream.is_closed

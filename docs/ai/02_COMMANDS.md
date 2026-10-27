@@ -27,6 +27,7 @@ Remove-Item Env:LATENCY_ANALYZER_ONEFILE
 .\dist\WindowsAudioLatencyAnalyzer.exe --smoke-test
 ```
 
+- Windows 环境通过 `requirements.txt` 安装 PyAudioWPatch，用于 Software Loop 的真实 WASAPI 数字环回；spec 会收集其 Python 模块、原生扩展与 DLL。
 - `--simulate`：使用明确标注的离线模拟设备，不产生真实测量结果。
 - `--smoke-test`：启动后自动退出，用于验证入口、主题资源、配置、数据库和资源初始化。
 - `app.audio_diagnostic`：使用真实 sounddevice 后端验证独立播放/采集、连续背景音、预热和探针调度；设备参数可按 `--help` 覆盖，不计算声学延迟。

@@ -25,7 +25,7 @@
 - **现象：** `PaWasapi_UpdateDeviceList` 符号存在，但调用固定返回 `paInternalError (-9986)`；monkeypatch 单元测试无法发现该真实兼容性问题。
 - **原因：** sounddevice 0.5.6 随附的 PortAudio V19.7.0 使用默认构建，`PA_WASAPI_MAX_CONST_DEVICE_COUNT=0`，对应源码直接返回 `paInternalError`。
 - **正确做法：** 优先调用专用更新接口；仅对 `-9986` 在无活动流、扫描单飞且未开始测量时通过 `sd._terminate()` / `sd._initialize()` 重建设备表，其他错误仍明确失败。必须执行真实 `python -m app.audio_diagnostic --list-devices` 与 Qt 后台线程冒烟，活动会话中禁止重建。
-- **CFFI 能力探测：** `hasattr(sd._lib, 未导出符号)` 可能直接抛 `ffi.error`，不能当作普通 `AttributeError`；缺失 Loopback 符号属于明确不支持，不应导致普通枚举失败或产生误导性异常警告。
+- **CFFI 能力探测：** `hasattr(sd._lib, 未导出符号)` 可能直接抛 `ffi.error`，不能当作普通 `AttributeError`，普通枚举不应因此失败。Software Loop 不再依据 sounddevice 的 Loopback 符号判定，统一由 `pyaudiowpatch_backend.py` 检测并使用真实 PyAudioWPatch / WASAPI 端点。
 
 ## QThread 活动会话的有界关闭
 

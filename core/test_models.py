@@ -19,6 +19,7 @@ class TestSessionConfig:
     calibration_profile: CalibrationProfile | None = None
     output_device_name: str = ""
     input_device_name: str = ""
+    diagnostic_mode: str | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     session_id: str = field(default_factory=lambda: uuid4().hex)
     session_name: str = ""
@@ -31,6 +32,8 @@ class TestSessionConfig:
             raise ValueError("会话 ID 不能为空")
         if self.connection_type not in {"unknown", "wired", "usb", "2.4ghz", "bluetooth", "other"}:
             raise ValueError("不支持的连接方式")
+        if self.diagnostic_mode not in {None, "software", "electrical", "acoustic"}:
+            raise ValueError("不支持的环回诊断模式")
         if not math.isfinite(self.compensation_ms):
             raise ValueError("补偿值必须为有限数值")
         if self.started_at.tzinfo is None or self.started_at.utcoffset() is None:

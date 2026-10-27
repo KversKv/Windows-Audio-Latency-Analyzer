@@ -88,11 +88,15 @@ _INVALID_REASON_LABELS = {
     "capture_timeline_discontinuous": "采集时间轴不连续",
     "missing_playback_timestamp": "缺少播放 DAC 时间戳",
     "missing_capture_timestamp": "缺少采集 ADC 时间戳",
+    "software_clock_domain_missing": "播放或数字环回缺少共享时钟域标识",
+    "software_clock_domain_mismatch": "播放与数字环回的时钟域不一致",
 }
 
 _TIMING_BASIS_LABELS = {
     "dac_adc_stream_timestamps": "DAC/ADC 流时间戳 + 样本索引映射",
     "dac_adc_stream_timestamps_unavailable": "DAC/ADC 时间锚点不可用",
+    "wasapi_digital_loopback_stream_timestamps": "WASAPI 数字环回 DAC/ADC 流时间戳 + 样本索引映射",
+    "wasapi_digital_loopback_timestamps_unavailable": "WASAPI 数字环回时间锚点或共享时钟域不可用",
     "relative_sample_index": "仅相对样本索引，缺少完整硬件时间映射",
 }
 
@@ -101,6 +105,8 @@ _TIMING_LIMITATION_LABELS = {
     "playback_sample_rate_drift_uncalibrated": "播放采样率漂移未校准",
     "capture_sample_rate_drift_uncalibrated": "采集采样率漂移未校准",
     "playback_or_capture_time_anchor_unavailable": "播放或采集时间锚点不可用",
+    "software_clock_domain_missing": "播放或数字环回缺少共享时钟域标识",
+    "software_clock_domain_mismatch": "播放与数字环回的时钟域不一致",
     "relative_sample_time_only": "只有相对样本时间",
 }
 
@@ -299,6 +305,11 @@ class DiagnosticsPanel(QFrame):
 
         diagnostic_config = replace(
             config,
+            audio=(
+                replace(config.audio, input_device_id=None)
+                if mode is DiagnosticMode.SOFTWARE
+                else config.audio
+            ),
             measurement=replace(
                 config.measurement,
                 default_test_count=1,
@@ -306,6 +317,8 @@ class DiagnosticsPanel(QFrame):
             ),
             compensation_ms=0.0,
             calibration_profile=None,
+            input_device_name="" if mode is DiagnosticMode.SOFTWARE else config.input_device_name,
+            diagnostic_mode=mode.value,
             session_name=f"Loopback Diagnostics / {mode.value}",
             notes=_MODE_DESCRIPTIONS[mode],
         )
@@ -352,7 +365,7 @@ class DiagnosticsPanel(QFrame):
             return capability.detail
         if not inventory.output_devices:
             return "未检测到可用播放设备"
-        if not inventory.input_devices:
+        if mode is not DiagnosticMode.SOFTWARE and not inventory.input_devices:
             return "未检测到可用采集设备"
         return None
 
@@ -441,9 +454,14 @@ class DiagnosticsPanel(QFrame):
         audio = config.audio
         measurement = config.measurement
         blocksize = str(audio.blocksize) if audio.blocksize else "自动"
+        route = (
+            f"播放 {config.output_device_name}（ID {audio.output_device_id}） → 其 WASAPI 数字环回"
+            if config.diagnostic_mode == "software"
+            else f"播放 {config.output_device_name}（ID {audio.output_device_id}） → "
+            f"采集 {config.input_device_name}（ID {audio.input_device_id}）"
+        )
         self.config_label.setText(
-            f"测试配置：播放 {config.output_device_name}（ID {audio.output_device_id}） → "
-            f"采集 {config.input_device_name}（ID {audio.input_device_id}）；"
+            f"测试配置：{route}；"
             f"{audio.sample_rate} Hz，输出/输入 {audio.output_channels}/{audio.input_channels} 声道，"
             f"块大小 {blocksize}；预热 {measurement.warmup_seconds:g} s；"
             f"Chirp {measurement.stimulus_start_frequency_hz:g}–"
@@ -476,8 +494,10 @@ class DiagnosticsPanel(QFrame):
             "capture_timeline_discontinuous",
             "missing_playback_timestamp",
             "missing_capture_timestamp",
+            "software_clock_domain_missing",
+            "software_clock_domain_mismatch",
         }:
-            advice.append("优先排查采集丢帧和 DAC/ADC 时间锚点，当前延迟不能作为真实链路结论")
+            advice.append("优先排查采集丢帧、DAC/ADC 时间锚点和共享时钟域，当前延迟不能作为链路结论")
         if "latency_out_of_range" in reasons:
             advice.append("核对设备选择、信号路由和有效延迟范围，原始超范围结果已保留")
         captured = record.captured

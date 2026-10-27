@@ -18,6 +18,7 @@ class StreamTiming:
     current_time: float | None
     input_adc_time: float | None
     output_dac_time: float | None
+    clock_domain: str | None = None
 
 
 class StreamTelemetry:
@@ -30,6 +31,7 @@ class StreamTelemetry:
         self._current_time: float | None = None
         self._input_adc_time: float | None = None
         self._output_dac_time: float | None = None
+        self._clock_domain: str | None = None
 
     def record(
         self,
@@ -50,6 +52,7 @@ class StreamTelemetry:
             self._current_time = self._timestamp_or_none(time_info.current_time)
             self._input_adc_time = self._timestamp_or_none(time_info.input_buffer_adc_time)
             self._output_dac_time = self._timestamp_or_none(time_info.output_buffer_dac_time)
+            self._clock_domain = time_info.clock_domain or None
         finally:
             self._lock.release()
 
@@ -63,6 +66,7 @@ class StreamTelemetry:
                 current_time=self._current_time,
                 input_adc_time=self._input_adc_time,
                 output_dac_time=self._output_dac_time,
+                clock_domain=self._clock_domain,
             )
 
     @staticmethod

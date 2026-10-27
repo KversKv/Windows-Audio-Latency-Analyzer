@@ -4,7 +4,13 @@ import numpy as np
 import pytest
 
 from audio import audio_backend as backend_module
-from audio.audio_backend import AudioBackendError, SimulatedAudioBackend, SoundDeviceBackend
+from audio.audio_backend import (
+    AudioBackendError,
+    SimulatedAudioBackend,
+    SoftwareLoopbackCapability,
+    SoundDeviceBackend,
+)
+from audio import pyaudiowpatch_backend as loopback_module
 from audio.audio_device_manager import AudioDeviceManager
 
 
@@ -276,66 +282,15 @@ def test_software_loopback_is_unavailable_off_windows(monkeypatch):
     assert "仅支持 Windows WASAPI" in capability.detail
 
 
-@pytest.mark.parametrize("has_native_loopback", [False, True])
-def test_software_loopback_requires_python_and_native_interfaces(
-    monkeypatch,
-    has_native_loopback,
-):
-    def wasapi_settings():
-        pass
-
-    native = SimpleNamespace(
-        PaWasapi_IsLoopback=lambda: True
-    ) if has_native_loopback else SimpleNamespace()
-    monkeypatch.setattr(backend_module.os, "name", "nt")
-    monkeypatch.setattr(backend_module.sd, "WasapiSettings", wasapi_settings)
-    monkeypatch.setattr(backend_module.sd, "_lib", native)
-
-    capability = SoundDeviceBackend().software_loopback_capability()
-
-    assert capability.supported is False
-    assert "未提供完整" in capability.detail
-
-
-def test_software_loopback_is_not_enabled_by_partial_backend_detection(monkeypatch):
-    def wasapi_settings(*, loopback=False):
-        return loopback
-
-    monkeypatch.setattr(backend_module.os, "name", "nt")
-    monkeypatch.setattr(backend_module.sd, "WasapiSettings", wasapi_settings)
+def test_sounddevice_backend_delegates_loopback_capability_to_wpatch(monkeypatch):
+    expected = SoftwareLoopbackCapability(True, "测试数字环回可用")
     monkeypatch.setattr(
-        backend_module.sd,
-        "_lib",
-        SimpleNamespace(PaWasapi_IsLoopback=lambda: True),
+        loopback_module,
+        "detect_software_loopback_capability",
+        lambda: expected,
     )
 
-    capability = SoundDeviceBackend().software_loopback_capability()
-
-    assert capability.supported is False
-    assert "尚未接入经验证" in capability.detail
-
-
-def test_software_loopback_missing_cffi_symbol_is_expected_capability_gap(
-    monkeypatch,
-    caplog,
-):
-    def wasapi_settings(*, loopback=False):
-        return loopback
-
-    class MissingNativeLoopback:
-        def __getattr__(self, name):
-            raise RuntimeError(f"symbol {name} not found")
-
-    monkeypatch.setattr(backend_module.os, "name", "nt")
-    monkeypatch.setattr(backend_module.sd, "WasapiSettings", wasapi_settings)
-    monkeypatch.setattr(backend_module.sd, "_lib", MissingNativeLoopback())
-
-    capability = SoundDeviceBackend().software_loopback_capability()
-
-    assert capability.supported is False
-    assert "未提供完整" in capability.detail
-    assert "无法确认" not in capability.detail
-    assert "WASAPI Loopback 能力检测失败" not in caplog.text
+    assert SoundDeviceBackend().software_loopback_capability() is expected
 
 
 def test_device_scan_degrades_when_loopback_capability_check_fails():

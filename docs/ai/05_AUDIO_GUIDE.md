@@ -3,6 +3,7 @@
 ## P1 已实现接口
 
 - `audio_backend.py`：唯一 sounddevice 入口。`AudioBackend` 定义设备枚举及独立输入/输出开流；Windows/WASAPI 枚举先经 `PaWasapi_UpdateDeviceList` 更新原生设备表。默认 PortAudio 构建未启用动态设备表时该接口返回 `-9986`，后端仅在无活动流、扫描单飞且未开始测量时通过 sounddevice 终止并重新初始化 PortAudio 作为兼容回退；禁止在活动会话中重启 PortAudio。`AudioStream` 定义启动、停止、关闭和健康状态。后端将 PortAudio 回调参数映射为 `AudioCallbackTime` / `AudioStreamStatus`，后端异常转为 `AudioBackendError`。
+- `pyaudiowpatch_backend.py`：Software Loop 专用 PyAudioWPatch 入口，严格绑定所选 WASAPI 输出及其同名 `[Loopback]` 端点；播放与采集共用一个 `PyAudio` 实例，普通测量和 Electrical / Acoustic 不经过此后端。
 - `playback_engine.py`：整个会话只打开并启动一次播放流。背景音连续输出，`schedule_stimulus()` 使用绝对 `start_sample`；重叠或已过期的调度会被拒绝，错过回调位置会记录错误而不是伪造播放时间。
 - `capture_engine.py`：独立输入流连续采集到 `AudioRingBuffer`，控制线程读取样本。输入溢出、缓冲丢帧和意外停流通过 `check_health()` 报告。
 - `background_generator.py`：初始化时预生成确定性的带限噪声或粉红噪声，回调仅拷贝循环缓冲；默认配置集中在 `app.config.AudioConfig`。
@@ -27,8 +28,8 @@ python -m app.audio_diagnostic --warmup-seconds 3
 ### Loopback Diagnostics 当前边界
 
 - Electrical / Acoustic 复用现有连续双工流、Chirp、DAC/ADC 时间戳映射和互相关分析；面板强制单次、零补偿、无校准，结果只保留在内存中，不进入历史统计。独立采集时钟偏移与采样率漂移未校准时仍保留限制标记。
-- Software Loop 当前只提供运行时能力检测与不可用原因，不提供真实 WASAPI 回环测量。当前捆绑 sounddevice / PortAudio 缺少完整 Loopback 接口；即使接口齐全，在回环采集与时间戳映射接入并验证前也必须保持 `supported=False`，不得回退到 Stereo Mix、麦克风或模拟结果。
-- CFFI 查询未导出的原生符号可能抛 `ffi.error` 而非 `AttributeError`，应按预期能力缺失处理；普通设备枚举不得因此失败。
+- Software Loop 通过 PyAudioWPatch 采集所选播放设备的真实 WASAPI 数字环回，播放与采集共用同一个 `PyAudio` / PortAudio 实例及会话级 `clock_domain`，复用连续播放、warm-up、Chirp、Ring Buffer 和互相关链路。禁止选择普通输入设备，禁止回退到麦克风、Stereo Mix 或离线模拟。
+- Software Loop 只有在播放与采集的会话时钟域一致且 DAC/ADC 时间锚点可用时才计算延迟；时钟域缺失、不匹配或时间锚点不可信时保留原始波形并记录 `invalid_reason`，原始与补偿延迟均必须为 `None`。
 
 ## P2 已实现接口
 

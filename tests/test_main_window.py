@@ -609,6 +609,27 @@ def test_auto_refresh_defers_while_controller_is_active(dynamic_window, monkeypa
     assert page.selected_output_device_id() == "out-a"
 
 
+def test_software_session_config_does_not_require_input_device(main_window):
+    window, _ = main_window
+    _wait_initial_devices(window)
+    page = window.test_page
+    page.input_combo.setCurrentIndex(-1)
+
+    config = page.session_config(diagnostic_mode="software")
+
+    assert config.audio.output_device_id == "sim-output"
+    assert config.audio.input_device_id is None
+    assert config.output_device_name == "模拟耳机输出"
+    assert config.input_device_name == ""
+    assert config.diagnostic_mode == "software"
+    assert config.compensation_ms == 0.0
+    assert config.calibration_profile is None
+    with pytest.raises(ValueError, match="播放和录音设备"):
+        page.session_config()
+    with pytest.raises(ValueError, match="播放和录音设备"):
+        page.session_config(diagnostic_mode="electrical")
+
+
 def test_simulation_disables_all_real_diagnostic_modes(main_window):
     window, _ = main_window
     window.show()

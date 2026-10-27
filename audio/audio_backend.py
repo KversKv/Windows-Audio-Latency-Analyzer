@@ -1,4 +1,3 @@
-import inspect
 import logging
 import os
 from abc import ABC, abstractmethod
@@ -48,6 +47,7 @@ class AudioCallbackTime:
     input_buffer_adc_time: float = 0.0
     current_time: float = 0.0
     output_buffer_dac_time: float = 0.0
+    clock_domain: str | None = None
 
     def update(self, raw_time: Any) -> None:
         self.input_buffer_adc_time = float(raw_time.inputBufferAdcTime)
@@ -284,39 +284,9 @@ class SoundDeviceBackend(AudioBackend):
         return devices
 
     def software_loopback_capability(self) -> SoftwareLoopbackCapability:
-        if os.name != "nt":
-            return SoftwareLoopbackCapability(
-                supported=False,
-                detail="Software Loop 仅支持 Windows WASAPI，当前系统不可用",
-            )
-        try:
-            wasapi_settings = getattr(sd, "WasapiSettings", None)
-            has_loopback_binding = (
-                wasapi_settings is not None
-                and "loopback" in inspect.signature(wasapi_settings).parameters
-            )
-        except Exception as exc:
-            logger.warning("WASAPI Loopback 能力检测失败", exc_info=True)
-            return SoftwareLoopbackCapability(
-                supported=False,
-                detail=f"无法确认 WASAPI Loopback Capture 支持状态：{exc}",
-            )
-        # CFFI 缺失符号会抛 ffi.error，而不是 AttributeError。
-        try:
-            sd._lib.PaWasapi_IsLoopback
-        except Exception:
-            has_native_loopback = False
-        else:
-            has_native_loopback = True
-        if not has_loopback_binding or not has_native_loopback:
-            return SoftwareLoopbackCapability(
-                supported=False,
-                detail="当前 sounddevice / PortAudio 未提供完整的 WASAPI Loopback Capture 接口",
-            )
-        return SoftwareLoopbackCapability(
-            supported=False,
-            detail="当前后端尚未接入经验证的 WASAPI 回环采集与时间戳映射",
-        )
+        from audio.pyaudiowpatch_backend import detect_software_loopback_capability
+
+        return detect_software_loopback_capability()
 
     def open_output_stream(
         self,

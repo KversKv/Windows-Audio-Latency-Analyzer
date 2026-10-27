@@ -13,6 +13,7 @@ from audio.audio_synchronizer import AudioSynchronizer, SampleTimeAnchor
 from audio.background_generator import BackgroundGenerator
 from audio.capture_engine import CaptureEngine
 from audio.playback_engine import PlaybackEngine, ScheduledStimulus
+from audio.pyaudiowpatch_backend import PyAudioWPatchBackend
 from audio.stimulus_generator import ChirpGenerator
 from audio.stream_common import AudioStreamError
 from core.device_service import DeviceService
@@ -57,6 +58,8 @@ class TestSessionWorker(QObject):
         self._records: list[MeasurementRecord] = []
         self._playback: PlaybackEngine | None = None
         self._capture: CaptureEngine | None = None
+        self._diagnostic_backend: PyAudioWPatchBackend | None = None
+        self._output_device: AudioDevice | None = None
         self._is_simulation = config.is_simulation
 
     def request_stop(self) -> None:
@@ -118,6 +121,8 @@ class TestSessionWorker(QObject):
             raise _DeviceCheckError(f"测量配置无效：{exc}") from exc
 
         if inventory.is_simulation:
+            if self._config.diagnostic_mode == "software":
+                raise _DeviceCheckError("离线模拟后端不提供真实 WASAPI 数字环回")
             self.state_changed.emit(TestState.READY)
             return self._run_simulation(generator, analyzer)
 
@@ -135,13 +140,18 @@ class TestSessionWorker(QObject):
         inputs: tuple[AudioDevice, ...],
     ) -> None:
         output = self._find_device(outputs, self._config.audio.output_device_id)
-        input_device = self._find_device(inputs, self._config.audio.input_device_id)
         if output is None:
             raise _DeviceCheckError("所选播放设备不可用，请刷新设备列表")
-        if input_device is None:
-            raise _DeviceCheckError("所选录音设备不可用，请刷新设备列表")
         if output.max_output_channels < self._config.audio.output_channels:
             raise _DeviceCheckError("所选播放设备不支持当前输出声道数")
+        self._output_device = output
+        if self._config.diagnostic_mode == "software":
+            if output.is_simulation or "wasapi" not in output.host_api.lower():
+                raise _DeviceCheckError("Software Loop 仅支持真实 Windows WASAPI 播放设备")
+            return
+        input_device = self._find_device(inputs, self._config.audio.input_device_id)
+        if input_device is None:
+            raise _DeviceCheckError("所选录音设备不可用，请刷新设备列表")
         if input_device.max_input_channels < self._config.audio.input_channels:
             raise _DeviceCheckError("所选录音设备不支持当前输入声道数")
 
@@ -184,8 +194,16 @@ class TestSessionWorker(QObject):
             amplitude=audio.background_amplitude,
             kind=audio.background_kind,
         )
+        backend = self._service.backend
+        capture_device_id = audio.input_device_id
+        if self._config.diagnostic_mode == "software":
+            if self._output_device is None:
+                raise _DeviceCheckError("Software Loop 缺少已校验的播放设备")
+            self._diagnostic_backend = PyAudioWPatchBackend(self._output_device)
+            backend = self._diagnostic_backend
+            capture_device_id = None
         self._playback = PlaybackEngine(
-            self._service.backend,
+            backend,
             device_id=audio.output_device_id,
             sample_rate=audio.sample_rate,
             channels=audio.output_channels,
@@ -194,8 +212,8 @@ class TestSessionWorker(QObject):
             warmup_seconds=measurement.warmup_seconds,
         )
         self._capture = CaptureEngine(
-            self._service.backend,
-            device_id=audio.input_device_id,
+            backend,
+            device_id=capture_device_id,
             sample_rate=audio.sample_rate,
             channels=audio.input_channels,
             blocksize=audio.blocksize,
@@ -337,8 +355,11 @@ class TestSessionWorker(QObject):
         capture_start: int | None,
         capture_complete: bool,
     ) -> LatencyMeasurement:
-        synchronizer = self._make_synchronizer(scheduled, capture_start)
         reasons: list[str] = []
+        clock_domain_error = self._software_clock_domain_error(scheduled)
+        if clock_domain_error is not None:
+            reasons.append(clock_domain_error)
+        synchronizer = self._make_synchronizer(scheduled, capture_start)
         if not capture_complete:
             reasons.append("capture_timeout")
         if scheduled.state != "completed":
@@ -365,7 +386,7 @@ class TestSessionWorker(QObject):
             )
             if scheduled.playback_time_seconds is None:
                 reasons.append("missing_playback_timestamp")
-            elif capture_start is not None:
+            elif capture_start is not None and clock_domain_error is None:
                 reasons.append("missing_capture_timestamp")
             measurement = replace(
                 measurement,
@@ -373,8 +394,14 @@ class TestSessionWorker(QObject):
                 compensated_latency_ms=None,
                 playback_timestamp_seconds=scheduled.playback_time_seconds,
                 capture_timestamp_seconds=None,
-                timing_basis="dac_adc_stream_timestamps_unavailable",
-                timing_limitations=("playback_or_capture_time_anchor_unavailable",),
+                timing_basis=(
+                    "wasapi_digital_loopback_timestamps_unavailable"
+                    if self._config.diagnostic_mode == "software"
+                    else "dac_adc_stream_timestamps_unavailable"
+                ),
+                timing_limitations=(
+                    clock_domain_error or "playback_or_capture_time_anchor_unavailable",
+                ),
             )
         return self._with_invalid_reasons(measurement, reasons)
 
@@ -388,6 +415,9 @@ class TestSessionWorker(QObject):
         capture_timing = self._capture.latest_timing
         if scheduled.playback_time_seconds is None or capture_timing.input_adc_time is None:
             return None
+        is_software = self._config.diagnostic_mode == "software"
+        if is_software and self._software_clock_domain_error(scheduled) is not None:
+            return None
         return AudioSynchronizer(
             playback_anchor=SampleTimeAnchor(
                 sample_index=scheduled.start_sample,
@@ -399,7 +429,19 @@ class TestSessionWorker(QObject):
                 device_timestamp_seconds=capture_timing.input_adc_time,
                 sample_rate=self._config.audio.sample_rate,
             ),
+            capture_clock_offset_seconds=0.0 if is_software else None,
+            timing_basis="wasapi_digital_loopback_stream_timestamps" if is_software else None,
         )
+
+    def _software_clock_domain_error(self, scheduled: ScheduledStimulus) -> str | None:
+        if self._config.diagnostic_mode != "software" or self._capture is None:
+            return None
+        capture_domain = self._capture.latest_timing.clock_domain
+        if not scheduled.clock_domain or not capture_domain:
+            return "software_clock_domain_missing"
+        if scheduled.clock_domain != capture_domain:
+            return "software_clock_domain_mismatch"
+        return None
 
     def _run_simulation(
         self,
@@ -486,6 +528,14 @@ class TestSessionWorker(QObject):
             except Exception as exc:
                 errors.append(str(exc) or type(exc).__name__)
                 logger.error("关闭测试音频引擎失败", exc_info=True)
+        if self._diagnostic_backend is not None:
+            try:
+                self._diagnostic_backend.close()
+            except Exception as exc:
+                errors.append(str(exc) or type(exc).__name__)
+                logger.error("关闭数字环回后端失败", exc_info=True)
+            finally:
+                self._diagnostic_backend = None
         return "；".join(errors) if errors else None
 
 

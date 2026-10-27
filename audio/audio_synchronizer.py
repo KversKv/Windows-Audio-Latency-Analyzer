@@ -40,6 +40,7 @@ class AudioSynchronizer:
         capture_clock_offset_seconds: float | None = None,
         playback_drift_ppm: float | None = None,
         capture_drift_ppm: float | None = None,
+        timing_basis: str | None = None,
     ) -> None:
         for name, value in (
             ("采集时钟偏移", capture_clock_offset_seconds),
@@ -60,6 +61,7 @@ class AudioSynchronizer:
         self.capture_clock_offset_seconds = capture_clock_offset_seconds
         self.playback_drift_ppm = playback_drift_ppm
         self.capture_drift_ppm = capture_drift_ppm
+        self.timing_basis = timing_basis
 
     @classmethod
     def from_stream_timings(

@@ -105,7 +105,7 @@ class LatencyAnalyzer:
         capture_timestamp_seconds: float | None = None
         if synchronizer is not None:
             playback_timestamp_seconds = synchronizer.playback_time_at(playback_sample_index)
-            timing_basis = (
+            timing_basis = synchronizer.timing_basis or (
                 "synthetic_dac_adc_timestamps"
                 if is_simulation
                 else "dac_adc_stream_timestamps"

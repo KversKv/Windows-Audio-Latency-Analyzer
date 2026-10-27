@@ -517,14 +517,35 @@ class TestPage(QWidget):
     def selected_calibration_profile(self) -> CalibrationProfile | None:
         return self._config.calibration.profile_by_id(self.calibration_profile_combo.currentData())
 
-    def session_config(self) -> TestSessionConfig:
-        context = self.calibration_context()
-        if context is None:
-            raise ValueError("请先选择有效的播放和录音设备")
+    def session_config(self, *, diagnostic_mode: str | None = None) -> TestSessionConfig:
+        is_software = diagnostic_mode == "software"
+        if is_software:
+            output_id = self.selected_output_device_id()
+            if output_id is None:
+                raise ValueError("请先选择有效的播放设备")
+            output_name = self.selected_output_device_name()
+            input_id = None
+            input_name = ""
+            profile = None
+            compensation_ms = 0.0
+        else:
+            context = self.calibration_context()
+            if context is None:
+                raise ValueError("请先选择有效的播放和录音设备")
+            output_id = context.output_device_id
+            output_name = context.output_device
+            input_id = context.input_device_id
+            input_name = context.input_device
+            profile = self.selected_calibration_profile()
+            if profile is not None:
+                profile.require_match(context)
+            compensation_ms = (
+                profile.compensation_ms if profile is not None else self.compensation_spin.value()
+            )
         audio = replace(
             self._config.audio,
-            output_device_id=context.output_device_id,
-            input_device_id=context.input_device_id,
+            output_device_id=output_id,
+            input_device_id=input_id,
         )
         measurement = replace(
             self._config.measurement,
@@ -534,18 +555,14 @@ class TestPage(QWidget):
             stimulus_amplitude=self.amplitude_spin.value(),
             simulation_delay_ms=self.simulation_delay_spin.value(),
         )
-        profile = self.selected_calibration_profile()
-        if profile is not None:
-            profile.require_match(context)
         return TestSessionConfig(
             audio=audio,
             measurement=measurement,
-            compensation_ms=(
-                profile.compensation_ms if profile is not None else self.compensation_spin.value()
-            ),
+            compensation_ms=compensation_ms,
             calibration_profile=profile,
-            output_device_name=context.output_device,
-            input_device_name=context.input_device,
+            output_device_name=output_name,
+            input_device_name=input_name,
+            diagnostic_mode=diagnostic_mode,
             headphone_name=self.headphone_name_edit.text().strip(),
             connection_type=self.connection_type_combo.currentData(),
         )
@@ -596,7 +613,9 @@ class TestPage(QWidget):
         ):
             return
         try:
-            config = self.session_config()
+            config = self.session_config(
+                diagnostic_mode=self.diagnostics_panel.current_mode.value
+            )
         except ValueError as exc:
             self.diagnostics_panel.show_error(f"无法启动诊断：{exc}")
             return

@@ -24,6 +24,7 @@ class ScheduledStimulus:
     start_sample: int
     position: int = 0
     playback_time_seconds: float | None = None
+    clock_domain: str | None = None
     state: str = "scheduled"
 
     @property
@@ -299,6 +300,7 @@ class PlaybackEngine:
             count = min(scheduled.frame_count - scheduled.position, frames - offset)
             if scheduled.position == 0:
                 dac_time = time_info.output_buffer_dac_time
+                scheduled.clock_domain = time_info.clock_domain or None
                 if math.isfinite(dac_time) and dac_time > 0:
                     scheduled.playback_time_seconds = dac_time + offset / self._sample_rate
                 scheduled.state = "rendering"

@@ -6,21 +6,24 @@
 import os
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_all
+
 
 project_root = Path(SPECPATH).parent
 onefile = os.environ.get("LATENCY_ANALYZER_ONEFILE") == "1"
+wpatch_datas, wpatch_binaries, wpatch_hiddenimports = collect_all("pyaudiowpatch")
 
 a = Analysis(
     [str(project_root / "main.py")],
     pathex=[str(project_root)],
-    binaries=[],
+    binaries=wpatch_binaries,
     datas=[
         (str(project_root / "ui" / "styles" / "dark_theme.qss"), "ui/styles"),
         (str(project_root / "ui" / "assets" / "app_icon.png"), "ui/assets"),
         (str(project_root / "ui" / "assets" / "spin_up.svg"), "ui/assets"),
         (str(project_root / "ui" / "assets" / "spin_down.svg"), "ui/assets"),
-    ],
-    hiddenimports=[],
+    ] + wpatch_datas,
+    hiddenimports=wpatch_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
