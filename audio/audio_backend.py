@@ -74,6 +74,20 @@ class AudioStreamStatus:
 AudioCallback = Callable[[np.ndarray, int, AudioCallbackTime, AudioStreamStatus], None]
 
 
+@dataclass(frozen=True, slots=True)
+class AudioStreamInfo:
+    device_id: int | str | None = None
+    device_name: str = "unknown"
+    host_api: str = "unknown"
+    native_channels: int | None = None
+    sample_rate: float | None = None
+    blocksize: int | None = None
+    latency_seconds: float | None = None
+    input_latency_seconds: float | None = None
+    output_latency_seconds: float | None = None
+    endpoint_default_sample_rate: float | None = None
+
+
 class AudioStream(ABC):
     @abstractmethod
     def start(self) -> None:
@@ -101,6 +115,10 @@ class AudioStream(ABC):
     @abstractmethod
     def callback_error(self) -> Exception | None:
         raise NotImplementedError
+
+    @property
+    def stream_info(self) -> AudioStreamInfo:
+        return AudioStreamInfo()
 
 
 class AudioBackend(ABC):
@@ -158,6 +176,7 @@ class SoundDeviceStream(AudioStream):
         self._callback_status = AudioStreamStatus()
         self._callback_error: Exception | None = None
         self._closed = False
+        self._is_output = is_output
         stream_class = sd.OutputStream if is_output else sd.InputStream
         raw_callback = self._output_callback if is_output else self._input_callback
         self._stream = stream_class(
@@ -185,6 +204,25 @@ class SoundDeviceStream(AudioStream):
     @property
     def callback_error(self) -> Exception | None:
         return self._callback_error
+
+    @property
+    def stream_info(self) -> AudioStreamInfo:
+        try:
+            device_id = int(self._stream.device)
+            raw_device = sd.query_devices(device_id)
+            host_api = sd.query_hostapis(int(raw_device["hostapi"]))
+            return AudioStreamInfo(
+                device_id=device_id,
+                device_name=str(raw_device["name"]),
+                host_api=str(host_api["name"]),
+                native_channels=int(self._stream.channels),
+                sample_rate=float(self._stream.samplerate),
+                blocksize=int(self._stream.blocksize),
+                latency_seconds=float(self._stream.latency),
+                endpoint_default_sample_rate=float(raw_device["default_samplerate"]),
+            )
+        except Exception as exc:
+            raise AudioBackendError(f"无法读取音频流信息：{exc}") from exc
 
     def start(self) -> None:
         try:

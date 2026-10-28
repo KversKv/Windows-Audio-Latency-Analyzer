@@ -7,10 +7,11 @@ from audio.audio_backend import (
     AudioBackendError,
     AudioCallbackTime,
     AudioStream,
+    AudioStreamInfo,
     AudioStreamStatus,
 )
 from audio.ring_buffer import AudioRingBuffer
-from audio.stream_common import AudioStreamError, StreamTelemetry, StreamTiming
+from audio.stream_common import AudioStreamError, StreamDiagnostics, StreamTelemetry, StreamTiming
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +95,22 @@ class CaptureEngine:
     @property
     def latest_timing(self) -> StreamTiming:
         return self._telemetry.snapshot()
+
+    def diagnostics(self) -> StreamDiagnostics:
+        stream_info = self._stream.stream_info if self._stream is not None else AudioStreamInfo()
+        return StreamDiagnostics.build(
+            direction="input",
+            requested_device_id=self._device_id,
+            requested_sample_rate=self._sample_rate,
+            requested_channels=self._channels,
+            requested_blocksize=self._blocksize,
+            stream_info=stream_info,
+            open_count=self._open_count,
+            start_count=self._start_count,
+            timing=self.latest_timing,
+            overflow_count=self._overflow_count,
+            dropped_frames=self.dropped_frames,
+        )
 
     def open(self) -> None:
         if self._closed:

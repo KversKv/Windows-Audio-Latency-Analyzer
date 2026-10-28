@@ -11,10 +11,11 @@ from audio.audio_backend import (
     AudioBackendError,
     AudioCallbackTime,
     AudioStream,
+    AudioStreamInfo,
     AudioStreamStatus,
 )
 from audio.background_generator import BackgroundGenerator
-from audio.stream_common import AudioStreamError, StreamTelemetry, StreamTiming
+from audio.stream_common import AudioStreamError, StreamDiagnostics, StreamTelemetry, StreamTiming
 
 
 @dataclass(slots=True)
@@ -65,6 +66,7 @@ class PlaybackEngine:
         self._running = False
         self._closed = False
         self._frames_rendered = 0
+        self._active_block_end = 0
         self._callback_count = 0
         self._open_count = 0
         self._start_count = 0
@@ -123,6 +125,21 @@ class PlaybackEngine:
     def latest_timing(self) -> StreamTiming:
         return self._telemetry.snapshot()
 
+    def diagnostics(self) -> StreamDiagnostics:
+        stream_info = self._stream.stream_info if self._stream is not None else AudioStreamInfo()
+        return StreamDiagnostics.build(
+            direction="output",
+            requested_device_id=self._device_id,
+            requested_sample_rate=self._sample_rate,
+            requested_channels=self._channels,
+            requested_blocksize=self._blocksize,
+            stream_info=stream_info,
+            open_count=self._open_count,
+            start_count=self._start_count,
+            timing=self.latest_timing,
+            underflow_count=self._underflow_count,
+        )
+
     def open(self) -> None:
         if self._closed:
             raise AudioStreamError("播放引擎已关闭，不能重新打开")
@@ -167,7 +184,7 @@ class PlaybackEngine:
         stimulus = self._prepare_samples(samples)
 
         with self._scheduler_lock:
-            current_sample = self._frames_rendered
+            current_sample = max(self._frames_rendered, self._active_block_end)
             if start_sample is None:
                 start_sample = max(current_sample + lead_frames, self._next_free_sample)
             if start_sample < current_sample:
@@ -252,6 +269,7 @@ class PlaybackEngine:
             return
         block_start = self._frames_rendered
         block_end = block_start + frames
+        self._active_block_end = block_end
         self._callback_count += 1
         if status.output_underflow:
             self._underflow_count += 1

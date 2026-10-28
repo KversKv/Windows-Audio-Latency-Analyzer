@@ -6,6 +6,7 @@ from uuid import uuid4
 import numpy as np
 
 from app.config import AudioConfig, CalibrationContext, CalibrationProfile, MeasurementConfig
+from audio.stream_common import StreamDiagnostics
 from core.latency_analyzer import LatencyMeasurement
 from core.statistics_engine import SessionStatistics, StatisticsEngine
 from core.test_state_machine import TestState
@@ -87,6 +88,12 @@ class MeasurementRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class SessionAudioDiagnostics:
+    playback: StreamDiagnostics | None = None
+    capture: StreamDiagnostics | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class TestSessionSnapshot:
     config: TestSessionConfig
     records: tuple[MeasurementRecord, ...]
@@ -94,6 +101,7 @@ class TestSessionSnapshot:
     started_at: datetime
     finished_at: datetime
     is_simulation: bool
+    audio_diagnostics: SessionAudioDiagnostics | None = None
 
     def __post_init__(self) -> None:
         if self.finished_at.tzinfo is None or self.finished_at.utcoffset() is None:

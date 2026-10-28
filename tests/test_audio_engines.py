@@ -211,6 +211,15 @@ def test_playback_and_capture_open_independently():
     assert playback.frames_rendered == 128
     assert capture.frames_captured == 64
     np.testing.assert_array_equal(capture.read_all(), samples)
+    playback_diagnostics = playback.diagnostics()
+    capture_diagnostics = capture.diagnostics()
+    assert playback_diagnostics.requested_blocksize == 128
+    assert playback_diagnostics.min_callback_frames == 128
+    assert playback_diagnostics.max_callback_frames == 128
+    assert capture_diagnostics.min_callback_frames == 64
+    assert capture_diagnostics.max_callback_frames == 64
+    assert playback_diagnostics.windows_endpoint_mix_format == "unknown"
+    assert capture_diagnostics.apo_state == "unknown"
 
     playback.close()
     capture.close()
@@ -281,6 +290,40 @@ def test_overlapping_stimuli_are_rejected():
 
     with pytest.raises(ValueError, match="重叠"):
         engine.schedule_stimulus(np.ones((8, 1), dtype=np.float32), start_sample=start_sample)
+    engine.close()
+
+
+def test_short_lead_schedule_during_callback_starts_after_active_block():
+    backend = FakeBackend()
+    engine = make_playback(backend)
+    finish_warmup(backend, engine)
+    scheduled = []
+    original_render = engine._background.render
+
+    def render_and_schedule(outdata):
+        original_render(outdata)
+        scheduled.append(
+            engine.schedule_stimulus(
+                np.ones((4, 1), dtype=np.float32) * 0.05,
+                lead_frames=1,
+            )
+        )
+
+    engine._background.render = render_and_schedule
+    active_block_start = engine.frames_rendered
+    push_output(backend, engine, 128)
+
+    assert scheduled[0].start_sample == active_block_start + 129
+    assert scheduled[0].state == "scheduled"
+    assert scheduled[0].playback_time_seconds is None
+
+    engine._background.render = original_render
+    output = push_output(backend, engine, 128)
+    assert scheduled[0].state == "completed"
+    np.testing.assert_allclose(output[1:5], 0.05)
+    assert scheduled[0].playback_time_seconds == pytest.approx(
+        100.0 + scheduled[0].start_sample / engine.sample_rate
+    )
     engine.close()
 
 

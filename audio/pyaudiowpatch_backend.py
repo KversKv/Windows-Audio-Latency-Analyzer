@@ -13,6 +13,7 @@ from audio.audio_backend import (
     AudioCallbackTime,
     AudioDevice,
     AudioStream,
+    AudioStreamInfo,
     AudioStreamStatus,
     SoftwareLoopbackCapability,
 )
@@ -74,12 +75,14 @@ class PyAudioWPatchStream(AudioStream):
         channels: int,
         blocksize: int,
         is_output: bool,
+        endpoint: dict[str, Any],
         native_input_channels: int | None = None,
     ) -> None:
         self._backend = backend
         self._api = backend._api
         self._stream = raw_stream
         self._callback = callback
+        self._endpoint = endpoint
         self._channels = channels
         self._is_output = is_output
         self._native_input_channels = native_input_channels
@@ -115,6 +118,30 @@ class PyAudioWPatchStream(AudioStream):
     @property
     def callback_error(self) -> Exception | None:
         return self._callback_error
+
+    @property
+    def stream_info(self) -> AudioStreamInfo:
+        try:
+            default_sample_rate = self._endpoint.get("defaultSampleRate")
+            return AudioStreamInfo(
+                device_id=int(self._endpoint["index"]),
+                device_name=str(self._endpoint["name"]),
+                host_api="Windows WASAPI",
+                native_channels=(
+                    self._channels if self._is_output else self._native_input_channels
+                ),
+                input_latency_seconds=(
+                    None if self._is_output else float(self._stream.get_input_latency())
+                ),
+                output_latency_seconds=(
+                    float(self._stream.get_output_latency()) if self._is_output else None
+                ),
+                endpoint_default_sample_rate=(
+                    float(default_sample_rate) if default_sample_rate is not None else None
+                ),
+            )
+        except Exception as exc:
+            raise AudioBackendError(f"无法读取数字环回流信息：{exc}") from exc
 
     def start(self) -> None:
         try:
@@ -278,6 +305,7 @@ class PyAudioWPatchBackend(AudioBackend):
             channels=channels,
             blocksize=blocksize,
             is_output=True,
+            endpoint=endpoint,
         )
         self._streams.add(stream)
         return stream
@@ -319,6 +347,7 @@ class PyAudioWPatchBackend(AudioBackend):
             channels=channels,
             blocksize=blocksize,
             is_output=False,
+            endpoint=endpoint,
             native_input_channels=native_channels,
         )
         self._streams.add(stream)

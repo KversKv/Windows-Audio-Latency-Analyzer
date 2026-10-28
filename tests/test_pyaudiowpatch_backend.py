@@ -13,6 +13,7 @@ def _endpoint(index, name, *, output=False, loopback=False, channels=2):
         "name": name,
         "maxInputChannels": 0 if output else channels,
         "maxOutputChannels": channels if output else 0,
+        "defaultSampleRate": 48000.0,
         "isLoopbackDevice": loopback,
     }
 
@@ -36,6 +37,12 @@ class _FakeRawStream:
     def close(self):
         self.active = False
         self.closed = True
+
+    def get_input_latency(self):
+        return 0.02
+
+    def get_output_latency(self):
+        return 0.01
 
 
 class _FakePyAudio:
@@ -153,6 +160,15 @@ def test_loopback_streams_share_instance_and_map_real_callback_metadata(monkeypa
     assert input_received[0][1] == 50.01
     assert input_received[0][3].input_overflow is True
     assert output_received[0][1] == input_received[0][2] == backend.clock_domain
+    output_info = output.stream_info
+    capture_info = capture.stream_info
+    assert output_info.device_id == 10
+    assert output_info.output_latency_seconds == 0.01
+    assert output_info.input_latency_seconds is None
+    assert output_info.endpoint_default_sample_rate == 48000.0
+    assert capture_info.device_id == 11
+    assert capture_info.input_latency_seconds == 0.02
+    assert capture_info.native_channels == 2
 
     output.start()
     capture.start()

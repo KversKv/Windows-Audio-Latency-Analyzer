@@ -94,6 +94,7 @@ def _session_config(
     simulation_delay_ms=20.0,
     compensation_ms=0.0,
     max_latency_ms=200.0,
+    stimulus_duration_ms=10.0,
     calibration_profile=None,
     output_device_name="",
     input_device_name="",
@@ -115,6 +116,7 @@ def _session_config(
         default_test_count=test_count,
         warmup_seconds=1.0,
         max_latency_ms=max_latency_ms,
+        stimulus_duration_ms=stimulus_duration_ms,
         stimulus_lead_ms=20.0,
         capture_tail_ms=10.0,
         inter_measurement_delay_ms=0.0,
@@ -174,11 +176,13 @@ class _FakeDuplexBackend(AudioBackend):
         sample_rate=48000,
         delay_frames=480,
         block_frames=240,
+        block_pattern=None,
         clock_domain=None,
     ):
         self.sample_rate = sample_rate
         self.delay_frames = delay_frames
         self.block_frames = block_frames
+        self.block_pattern = block_pattern
         self.clock_domain = clock_domain
         self.capture_clock_domain = clock_domain
         self.closed = False
@@ -225,7 +229,11 @@ class _FakeDuplexBackend(AudioBackend):
             or not self.input_stream.is_active
         ):
             return
-        frames = self.block_frames
+        frames = (
+            self.block_frames
+            if self.block_pattern is None
+            else self.block_pattern[self.output_callbacks % len(self.block_pattern)]
+        )
         output = np.zeros((frames, 1), dtype=np.float32)
         output_status = AudioStreamStatus(
             output_underflow=(
@@ -343,6 +351,19 @@ def test_simulated_controller_completes_and_preserves_compensation(controller_fa
     assert controller.snapshot is None
 
 
+def test_worker_is_released_after_finished_signal(controller_factory, qt_application):
+    controller = controller_factory(_simulated_service())
+    workers_at_finished = []
+    controller.finished.connect(lambda: workers_at_finished.append(controller._worker))
+    controller.start(_session_config(test_count=1))
+
+    assert _wait_for_signal(controller.finished) is True
+    assert workers_at_finished == [controller._worker]
+    assert controller._worker is not None
+    qt_application.processEvents()
+    assert controller._worker is None
+
+
 def test_invalid_simulated_measurement_is_retained(controller_factory):
     controller = controller_factory(_simulated_service())
     config = _session_config(test_count=1, simulation_delay_ms=250.0)
@@ -386,6 +407,10 @@ def test_real_stream_controller_measures_known_delay_without_reopening(controlle
     snapshot = controller.snapshot
     assert snapshot is not None and snapshot.is_simulation is False
     assert snapshot.completed_count == snapshot.valid_count == 2
+    assert snapshot.audio_diagnostics is not None
+    assert snapshot.audio_diagnostics.playback.requested_blocksize == 240
+    assert snapshot.audio_diagnostics.playback.min_callback_frames == 240
+    assert snapshot.audio_diagnostics.capture.max_callback_frames == 240
     for record in snapshot.records:
         measurement = record.measurement
         assert measurement.raw_latency_ms == pytest.approx(10.0, abs=0.1)
@@ -394,6 +419,39 @@ def test_real_stream_controller_measures_known_delay_without_reopening(controlle
         assert measurement.timing_basis == "dac_adc_stream_timestamps"
         assert record.capture_window_start_sample is not None
         assert record.captured.size > record.reference.size
+
+
+def test_real_stream_controller_handles_uneven_blocks_and_non_integer_lag(controller_factory):
+    backend = _FakeDuplexBackend(
+        delay_frames=373,
+        block_pattern=(173, 311, 97, 509),
+    )
+    controller = controller_factory(DeviceService(AudioDeviceManager(backend)))
+    timer = QTimer()
+    timer.setInterval(5)
+    timer.timeout.connect(backend.pump)
+    timer.start()
+    try:
+        controller.start(
+            _session_config(
+                backend="sounddevice",
+                test_count=1,
+                max_latency_ms=50.0,
+                stimulus_duration_ms=10.137,
+            )
+        )
+        assert _wait_for_signal(controller.finished, 10000) is True
+    finally:
+        timer.stop()
+
+    snapshot = controller.snapshot
+    assert controller.state == SessionState.COMPLETED
+    assert snapshot is not None and snapshot.valid_count == 1
+    record = snapshot.records[0]
+    assert record.reference.size % 240 != 0
+    assert record.measurement.raw_latency_ms == pytest.approx(373 * 1000 / 48000, abs=0.1)
+    assert snapshot.audio_diagnostics.playback.min_callback_frames == 97
+    assert snapshot.audio_diagnostics.playback.max_callback_frames == 509
 
 
 def _software_controller(controller_factory, monkeypatch):
@@ -448,7 +506,7 @@ def test_software_loopback_measures_known_delay_with_shared_clock(
     assert record.measurement.is_valid is True
     assert record.measurement.raw_latency_ms == pytest.approx(10.0, abs=0.1)
     assert record.measurement.timing_basis == "wasapi_digital_loopback_stream_timestamps"
-    assert "capture_clock_offset_uncalibrated" not in record.measurement.timing_limitations
+    assert "capture_clock_offset_uncalibrated" in record.measurement.timing_limitations
 
 
 @pytest.mark.parametrize(

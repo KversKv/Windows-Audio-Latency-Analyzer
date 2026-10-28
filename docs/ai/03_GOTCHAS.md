@@ -31,3 +31,8 @@
 
 - **现象：** UI 调用 `TestController.shutdown()` 并阻塞等待时，Worker 已请求停止但线程仍等到超时；完整 offscreen 套件还曾在收尾点进程级中止。
 - **正确做法：** `worker.finished → thread.quit` 显式使用 `Qt.ConnectionType.DirectConnection`，使工作线程完成时直接请求事件循环退出，不依赖被阻塞的 UI 先处理 queued 槽。关闭仍必须有超时，连续操作优先异步等待 `finished`，并验证停止后资源释放和下一次会话可启动。
+
+## QThread finished 槽内同步释放 Python Worker
+
+- **现象：** Realtek WASAPI Loopback 连续 20 次测量均有效后，进程在 `TestController._on_thread_finished()` 的 `self._worker = None` 处原生中止；仅提前关闭音频流不能消除。保留引用或推迟释放后，相同测量正常完成并退出。
+- **正确做法：** 音频引擎和后端仍在 Worker 收尾路径关闭；`finished` 槽只释放线程引用并发出通知，用 `QTimer.singleShot(0, ...)` 在事件循环下一轮清空 Worker，且校验实例避免误清新会话。回归测试须断言 `finished` 触发时 Worker 尚未同步销毁，处理后引用再清空；真实批量测量还需检查进程退出码，不能只看有效样本数。

@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 
 import numpy as np
-from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QThread, Qt, QTimer, Signal, Slot
 
 from audio.audio_backend import AudioBackendError, AudioDevice
 from audio.audio_synchronizer import AudioSynchronizer, SampleTimeAnchor
@@ -20,7 +20,12 @@ from core.device_service import DeviceService
 from core.latency_analyzer import LatencyAnalyzer, LatencyMeasurement
 from core.offline_simulation import OfflineLatencySimulator
 from core.statistics_engine import SessionStatistics, StatisticsEngine
-from core.test_models import MeasurementRecord, TestSessionConfig, TestSessionSnapshot
+from core.test_models import (
+    MeasurementRecord,
+    SessionAudioDiagnostics,
+    TestSessionConfig,
+    TestSessionSnapshot,
+)
 from core.test_state_machine import TestState, TestStateMachine
 
 logger = logging.getLogger(__name__)
@@ -84,6 +89,7 @@ class TestSessionWorker(QObject):
             error_messages.append(f"测试会话失败：{exc}")
             logger.error("测试会话 Worker 发生未处理异常", exc_info=True)
         finally:
+            audio_diagnostics = self._collect_audio_diagnostics()
             close_error = self._close_engines()
             if close_error is not None:
                 error_messages.append(f"关闭音频资源失败：{close_error}")
@@ -99,6 +105,7 @@ class TestSessionWorker(QObject):
             started_at=self._config.started_at,
             finished_at=datetime.now(timezone.utc),
             is_simulation=self._is_simulation,
+            audio_diagnostics=audio_diagnostics,
         )
         self.state_changed.emit(terminal_state)
         self.session_finished.emit(snapshot)
@@ -429,7 +436,7 @@ class TestSessionWorker(QObject):
                 device_timestamp_seconds=capture_timing.input_adc_time,
                 sample_rate=self._config.audio.sample_rate,
             ),
-            capture_clock_offset_seconds=0.0 if is_software else None,
+            capture_clock_offset_seconds=None,
             timing_basis="wasapi_digital_loopback_stream_timestamps" if is_software else None,
         )
 
@@ -518,6 +525,25 @@ class TestSessionWorker(QObject):
             return TestState.PLAYBACK_UNDERFLOW
         return TestState.AUDIO_STREAM_ERROR
 
+    def _collect_audio_diagnostics(self) -> SessionAudioDiagnostics | None:
+        playback = None
+        capture = None
+        for name, engine in (("播放", self._playback), ("采集", self._capture)):
+            if engine is None:
+                continue
+            try:
+                diagnostics = engine.diagnostics()
+            except Exception:
+                logger.error("读取%s流诊断信息失败", name, exc_info=True)
+                continue
+            if name == "播放":
+                playback = diagnostics
+            else:
+                capture = diagnostics
+        if playback is None and capture is None:
+            return None
+        return SessionAudioDiagnostics(playback=playback, capture=capture)
+
     def _close_engines(self) -> str | None:
         errors: list[str] = []
         for engine in (self._playback, self._capture):
@@ -528,6 +554,8 @@ class TestSessionWorker(QObject):
             except Exception as exc:
                 errors.append(str(exc) or type(exc).__name__)
                 logger.error("关闭测试音频引擎失败", exc_info=True)
+        self._playback = None
+        self._capture = None
         if self._diagnostic_backend is not None:
             try:
                 self._diagnostic_backend.close()
@@ -695,5 +723,11 @@ class TestController(QObject):
     def _on_thread_finished(self) -> None:
         if self.sender() is self._thread:
             self._thread = None
-            self._worker = None
+            worker = self._worker
+            if worker is not None:
+                QTimer.singleShot(0, lambda: self._release_finished_worker(worker))
             self.finished.emit()
+
+    def _release_finished_worker(self, worker: TestSessionWorker) -> None:
+        if self._worker is worker:
+            self._worker = None

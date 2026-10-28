@@ -221,6 +221,11 @@ def test_sounddevice_stream_maps_callback_timing_and_status(monkeypatch):
             self.callback = kwargs["callback"]
             self.active = False
             self.closed = False
+            self.device = kwargs["device"]
+            self.channels = kwargs["channels"]
+            self.samplerate = kwargs["samplerate"]
+            self.blocksize = kwargs["blocksize"]
+            self.latency = 0.01
             created_streams.append(self)
 
         def start(self):
@@ -233,6 +238,20 @@ def test_sounddevice_stream_maps_callback_timing_and_status(monkeypatch):
             self.closed = True
 
     monkeypatch.setattr(backend_module.sd, "OutputStream", FakeRawOutputStream)
+    monkeypatch.setattr(
+        backend_module.sd,
+        "query_devices",
+        lambda device_id: {
+            "name": "测试输出",
+            "hostapi": 1,
+            "default_samplerate": 48000.0,
+        },
+    )
+    monkeypatch.setattr(
+        backend_module.sd,
+        "query_hostapis",
+        lambda host_api: {"name": "Windows WASAPI"},
+    )
     received = []
 
     def callback(outdata, frames, time_info, status):
@@ -268,6 +287,13 @@ def test_sounddevice_stream_maps_callback_timing_and_status(monkeypatch):
     assert raw_stream.kwargs["device"] == 3
     assert raw_stream.kwargs["samplerate"] == 48000
     assert np.count_nonzero(outdata) == 0
+    info = stream.stream_info
+    assert info.device_id == 3
+    assert info.device_name == "测试输出"
+    assert info.host_api == "Windows WASAPI"
+    assert info.sample_rate == 48000.0
+    assert info.blocksize == 128
+    assert info.latency_seconds == 0.01
     stream.stop()
     stream.close()
     assert raw_stream.closed

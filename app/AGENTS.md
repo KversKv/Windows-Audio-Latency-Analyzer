@@ -7,4 +7,5 @@
 - 配置默认值集中在 `AudioConfig` / `MeasurementConfig` / `CalibrationConfig` / `UiConfig`，其他模块不得另建设备名、采样率、预热时间、补偿值等默认事实源。
 - `ConfigManager.load()` 对缺失或无效配置返回默认值并记录日志；`save()` 使用同目录临时文件替换，UI 调用保存必须经 `core/` 工作线程。
 - 默认配置与日志落在用户目录；测试通过 `LATENCY_ANALYZER_CONFIG_DIR` 隔离，禁止读写开发者的真实配置。
+- `loopback_diagnostic.py` 只复用 core 的真实会话做批量诊断，不写 SQLite；每次测量后立即更新 JSONL/JSON，进度报告标记 `report_finalized=false`，无效波形保留为 NPZ。
 - 修改组装或配置后，至少验证 `tests/test_config.py` 与 `tests/test_startup.py`；命令同步 @see docs/ai/02_COMMANDS.md。
