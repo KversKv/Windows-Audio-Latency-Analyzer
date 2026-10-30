@@ -2,7 +2,6 @@ import importlib
 import logging
 import os
 from typing import Any
-from uuid import uuid4
 
 import numpy as np
 
@@ -16,6 +15,8 @@ from audio.audio_backend import (
     AudioStreamInfo,
     AudioStreamStatus,
     SoftwareLoopbackCapability,
+    WINDOWS_WASAPI_CLOCK_DOMAIN,
+    _is_audited_portaudio_build,
 )
 
 logger = logging.getLogger(__name__)
@@ -255,13 +256,25 @@ class PyAudioWPatchBackend(AudioBackend):
             self._audio = self._api.PyAudio()
         except Exception as exc:
             raise AudioBackendError(f"无法初始化 PyAudioWPatch：{exc}") from exc
-        self._clock_domain = f"pyaudiowpatch:{uuid4().hex}"
+        # PortAudio 19.7.0's Windows WASAPI implementation derives stream and
+        # callback times from PaUtil_GetTime(), backed by QueryPerformanceCounter.
+        # Do not infer a shared origin from the PyAudio instance alone.
+        try:
+            version_text = self._api.get_portaudio_version_text()
+        except Exception:
+            logger.warning("无法读取 PyAudioWPatch 的 PortAudio 版本", exc_info=True)
+            version_text = ""
+        self._clock_domain: str | None = (
+            WINDOWS_WASAPI_CLOCK_DOMAIN
+            if _is_audited_portaudio_build(version_text)
+            else None
+        )
         self._streams: set[PyAudioWPatchStream] = set()
         self._output_endpoint: dict[str, Any] | None = None
         self._closed = False
 
     @property
-    def clock_domain(self) -> str:
+    def clock_domain(self) -> str | None:
         return self._clock_domain
 
     def list_devices(self) -> list[AudioDevice]:

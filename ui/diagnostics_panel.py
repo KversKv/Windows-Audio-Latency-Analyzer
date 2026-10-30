@@ -90,6 +90,8 @@ _INVALID_REASON_LABELS = {
     "missing_capture_timestamp": "缺少采集 ADC 时间戳",
     "software_clock_domain_missing": "播放或数字环回缺少共享时钟域标识",
     "software_clock_domain_mismatch": "播放与数字环回的时钟域不一致",
+    "stream_clock_domain_missing": "播放或采集流没有已验证的共同时间基准",
+    "stream_clock_domain_mismatch": "播放与采集流的时间基准不一致",
 }
 
 _TIMING_BASIS_LABELS = {
@@ -97,6 +99,8 @@ _TIMING_BASIS_LABELS = {
     "dac_adc_stream_timestamps_unavailable": "DAC/ADC 时间锚点不可用",
     "wasapi_digital_loopback_stream_timestamps": "WASAPI 数字环回 DAC/ADC 流时间戳 + 样本索引映射",
     "wasapi_digital_loopback_timestamps_unavailable": "WASAPI 数字环回时间锚点或共享时钟域不可用",
+    "cross_stream_clock_unverified": "独立流的共同时间基准未验证",
+    "wasapi_digital_loopback_cross_stream_clock_unverified": "WASAPI 独立流的共同时间基准未验证",
     "relative_sample_index": "仅相对样本索引，缺少完整硬件时间映射",
 }
 
@@ -107,6 +111,8 @@ _TIMING_LIMITATION_LABELS = {
     "playback_or_capture_time_anchor_unavailable": "播放或采集时间锚点不可用",
     "software_clock_domain_missing": "播放或数字环回缺少共享时钟域标识",
     "software_clock_domain_mismatch": "播放与数字环回的时钟域不一致",
+    "stream_clock_domain_missing": "播放或采集流没有已验证的共同时间基准",
+    "stream_clock_domain_mismatch": "播放与采集流的时间基准不一致",
     "relative_sample_time_only": "只有相对样本时间",
 }
 
@@ -345,9 +351,18 @@ class DiagnosticsPanel(QFrame):
         self.error_label.setText(message)
         self.error_label.show()
 
-    def shutdown(self) -> None:
+    def shutdown(self) -> bool:
+        if self._shutting_down:
+            return True
+        if not self.controller.shutdown():
+            self._update_controls()
+            return False
         self._shutting_down = True
-        self.controller.shutdown()
+        self._update_controls()
+        return True
+
+    def resume_after_shutdown(self) -> None:
+        self._shutting_down = False
         self._update_controls()
 
     def _unavailable_reason(
@@ -496,6 +511,8 @@ class DiagnosticsPanel(QFrame):
             "missing_capture_timestamp",
             "software_clock_domain_missing",
             "software_clock_domain_mismatch",
+            "stream_clock_domain_missing",
+            "stream_clock_domain_mismatch",
         }:
             advice.append("优先排查采集丢帧、DAC/ADC 时间锚点和共享时钟域，当前延迟不能作为链路结论")
         if "latency_out_of_range" in reasons:

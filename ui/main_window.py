@@ -278,18 +278,29 @@ class MainWindow(QMainWindow):
             self._config_save_worker = None
             self.settings_page.set_save_enabled(not self._shutting_down)
 
-    def shutdown(self) -> None:
+    def shutdown(self) -> bool:
         if self._shutting_down:
-            return
+            return True
         self._shutting_down = True
-        self.test_page.shutdown()
-        self._persistence_controller.shutdown()
+        if not self.test_page.shutdown():
+            self._shutting_down = False
+            return False
         thread = self._config_save_thread
         if thread is not None and thread.isRunning():
             thread.quit()
             if not thread.wait(2000):
                 logger.warning("配置保存线程未在 2 秒内结束")
+                self.test_page.resume_after_shutdown()
+                self._shutting_down = False
+                return False
+        if not self._persistence_controller.shutdown():
+            self._shutting_down = False
+            return False
+        return True
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        self.shutdown()
-        event.accept()
+        if self.shutdown():
+            event.accept()
+            return
+        self.statusBar().showMessage("后台音频或存储操作仍在结束，操作完成后请再次关闭窗口", 8000)
+        event.ignore()

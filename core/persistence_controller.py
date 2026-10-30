@@ -167,7 +167,6 @@ class PersistenceController(QObject):
         self._worker.operation_finished.connect(self.operation_finished)
         self._worker.operation_failed.connect(self._on_operation_failed)
         self._thread.finished.connect(self._worker.deleteLater)
-        self._thread.finished.connect(self._thread.deleteLater)
         self._thread.start()
 
     def save_session(self, snapshot: TestSessionSnapshot) -> None:
@@ -213,8 +212,6 @@ class PersistenceController(QObject):
             self._export_requested.emit(tuple(session_ids), str(destination), file_format)
 
     def shutdown(self, timeout_ms: int = 3000) -> bool:
-        if self._shutting_down:
-            return True
         self._shutting_down = True
         if self._thread.isRunning():
             self._thread.quit()

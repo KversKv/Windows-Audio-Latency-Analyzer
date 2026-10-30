@@ -177,7 +177,7 @@ class _FakeDuplexBackend(AudioBackend):
         delay_frames=480,
         block_frames=240,
         block_pattern=None,
-        clock_domain=None,
+        clock_domain="synthetic-test-clock",
     ):
         self.sample_rate = sample_rate
         self.delay_frames = delay_frames
@@ -506,7 +506,7 @@ def test_software_loopback_measures_known_delay_with_shared_clock(
     assert record.measurement.is_valid is True
     assert record.measurement.raw_latency_ms == pytest.approx(10.0, abs=0.1)
     assert record.measurement.timing_basis == "wasapi_digital_loopback_stream_timestamps"
-    assert "capture_clock_offset_uncalibrated" in record.measurement.timing_limitations
+    assert "capture_clock_offset_uncalibrated" not in record.measurement.timing_limitations
 
 
 @pytest.mark.parametrize(

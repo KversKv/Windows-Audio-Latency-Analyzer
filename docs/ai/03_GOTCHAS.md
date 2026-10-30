@@ -1,5 +1,11 @@
 # 03 GOTCHAS - 踩坑记录
 
+## PortAudio 独立流的时间戳不能默认直接相减
+
+- **现象：** 输入与输出各自打开独立 PortAudio 流，`inputBufferAdcTime` 和 `outputBufferDacTime` 都有值，但原始延迟仍可能偏移。
+- **原因：** PortAudio API 将时间戳关联到对应流；跨流能否相减取决于具体 host API 和构建。Fake 测试若都从相同常数起算，会掩盖未经验证的时间基准假设。
+- **正确做法：** 后端只有在目标 host API/build 的实现能证明共享原点时才给两条流相同 `clock_domain`。本项目只对 Windows WASAPI + PortAudio 19.7.0 按共同 QPC 时基标记；其他组合未知/不匹配时保留波形和互相关数据、将绝对延迟置空并标无效。硬件验收还要用已知参考延迟验证 ADC/DAC 延迟估计、偏移和漂移。
+
 ## PySide6 offscreen 测试中的工作线程信号等待
 
 - **现象：** 在 PySide6 6.12 / offscreen 环境中，`QSignalSpy.wait(2000)` 可接收普通 `QTimer` 信号，但本项目的设备枚举、配置保存 queued 信号未在断言前分发；测试失败后还可能因窗口线程未清理而异常退出。

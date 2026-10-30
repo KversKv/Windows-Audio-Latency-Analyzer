@@ -89,10 +89,10 @@ _TRANSITIONS = {
     TestState.COMPLETED: frozenset({TestState.SAVED, *_RECOVERY_STATES}),
     TestState.SAVED: _RECOVERY_STATES,
     TestState.USER_STOPPED: frozenset({TestState.SAVED, *_RECOVERY_STATES}),
-    TestState.DEVICE_ERROR: _RECOVERY_STATES,
-    TestState.AUDIO_STREAM_ERROR: _RECOVERY_STATES,
-    TestState.CAPTURE_OVERFLOW: _RECOVERY_STATES,
-    TestState.PLAYBACK_UNDERFLOW: _RECOVERY_STATES,
+    TestState.DEVICE_ERROR: frozenset({TestState.SAVED, *_RECOVERY_STATES}),
+    TestState.AUDIO_STREAM_ERROR: frozenset({TestState.SAVED, *_RECOVERY_STATES}),
+    TestState.CAPTURE_OVERFLOW: frozenset({TestState.SAVED, *_RECOVERY_STATES}),
+    TestState.PLAYBACK_UNDERFLOW: frozenset({TestState.SAVED, *_RECOVERY_STATES}),
 }
 
 

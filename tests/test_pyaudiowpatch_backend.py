@@ -91,6 +91,7 @@ def _api(audio):
         paOutputUnderflow=4,
         paOutputOverflow=8,
         paPrimingOutput=16,
+        get_portaudio_version_text=lambda: "PortAudio V19.7.0 (synthetic shared QPC clock)",
     )
 
 

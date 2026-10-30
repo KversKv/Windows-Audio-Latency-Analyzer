@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -11,6 +12,27 @@ import sounddevice as sd
 logger = logging.getLogger(__name__)
 
 _PA_INTERNAL_ERROR = -9986
+WINDOWS_WASAPI_CLOCK_DOMAIN = "windows:wasapi:portaudio-qpc:19.7.0"
+
+
+def _is_audited_portaudio_build(version_text: object) -> bool:
+    return re.search(r"(?<!\d)19\.7\.0(?!\d)", str(version_text)) is not None
+
+
+def _sounddevice_clock_domain(device_id: int | str | None) -> str | None:
+    """Return a shared Windows time domain only for the audited WASAPI build."""
+    if os.name != "nt":
+        return None
+    try:
+        _, version_text = sd.get_portaudio_version()
+        raw_device = sd.query_devices(device_id)
+        host_api = sd.query_hostapis(int(raw_device["hostapi"]))
+    except Exception:
+        logger.warning("无法验证 PortAudio 时间戳时基", exc_info=True)
+        return None
+    if _is_audited_portaudio_build(version_text) and "wasapi" in str(host_api["name"]).lower():
+        return WINDOWS_WASAPI_CLOCK_DOMAIN
+    return None
 
 
 class AudioBackendError(RuntimeError):
@@ -47,6 +69,9 @@ class AudioCallbackTime:
     input_buffer_adc_time: float = 0.0
     current_time: float = 0.0
     output_buffer_dac_time: float = 0.0
+    # Set only when this timestamp uses a verified clock origin shared by
+    # streams that the measurement will compare. Backend identity alone is
+    # not sufficient to establish a shared clock domain.
     clock_domain: str | None = None
 
     def update(self, raw_time: Any) -> None:
@@ -186,6 +211,9 @@ class SoundDeviceStream(AudioStream):
             blocksize=blocksize,
             dtype="float32",
             callback=raw_callback,
+        )
+        self._callback_time.clock_domain = _sounddevice_clock_domain(
+            device_id if device_id is not None else self._stream.device
         )
 
     @property

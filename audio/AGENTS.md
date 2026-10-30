@@ -6,7 +6,7 @@
 - `AudioBackend.list_devices()` 统一返回 `AudioDevice`；后端异常转换为 `AudioBackendError`，不得把后端异常直接抛入 UI。
 - `AudioDevice.identifier` 对真实设备保存 PortAudio 索引，对模拟设备使用独立字符串 ID；播放与录音能力必须分别判断，禁止假设设备为双工。
 - Windows 枚举优先保留 WASAPI 设备；`SoundDeviceBackend.list_devices()` 必须先经 `PaWasapi_UpdateDeviceList` 更新设备表再查询。默认 PortAudio 构建未启用动态设备表时会返回 `paInternalError (-9986)`，此时只允许在无活动流、扫描单飞且未开始测量时通过 sounddevice 终止并重新初始化 PortAudio；其他原生错误转为 `AudioBackendError`，不得返回旧列表。`AudioDeviceManager.scan()` 必须基于同一次后端查询拆分输入、输出列表，避免不一致快照。
-- `software_loopback_capability()` 只报告真实 PyAudioWPatch / WASAPI 环回端点能力。Software Loop 必须严格匹配所选输出及其 `[Loopback]` 端点，播放与采集共用同一个 `PyAudio` 实例和会话 `clock_domain`；禁止用 Stereo Mix、麦克风或离线模拟冒充 Software Loop。
+- `software_loopback_capability()` 只报告真实 PyAudioWPatch / WASAPI 环回端点能力。Software Loop 必须严格匹配所选输出及其 `[Loopback]` 端点；播放与采集共用一个 `PyAudio` 实例不代表时间戳具有共同原点。Windows WASAPI 仅在运行时 PortAudio 为已审计的 19.7.0 构建时提供共同 QPC `clock_domain`；其他版本/host API 保持未知并使绝对延迟无效、原始波形仍保留。禁止用 Stereo Mix、麦克风或离线模拟冒充 Software Loop。
 - 模拟后端采样率由调用方配置传入，仅提供明确标注的虚拟设备；不得伪造声学样本、时间戳或测量结果。
 - UI 不得直接调用同步枚举；后续回调引擎仍须遵守根文件的连续流、warm-up 与回调线程红线。
 - `open_output_stream()` / `open_input_stream()` 统一返回 `AudioStream`；回调只接收后端映射后的时间戳与状态，引擎不得反向导入 sounddevice。

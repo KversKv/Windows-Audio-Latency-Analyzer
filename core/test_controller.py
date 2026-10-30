@@ -363,7 +363,7 @@ class TestSessionWorker(QObject):
         capture_complete: bool,
     ) -> LatencyMeasurement:
         reasons: list[str] = []
-        clock_domain_error = self._software_clock_domain_error(scheduled)
+        clock_domain_error = self._clock_domain_error(scheduled)
         if clock_domain_error is not None:
             reasons.append(clock_domain_error)
         synchronizer = self._make_synchronizer(scheduled, capture_start)
@@ -402,9 +402,17 @@ class TestSessionWorker(QObject):
                 playback_timestamp_seconds=scheduled.playback_time_seconds,
                 capture_timestamp_seconds=None,
                 timing_basis=(
-                    "wasapi_digital_loopback_timestamps_unavailable"
-                    if self._config.diagnostic_mode == "software"
-                    else "dac_adc_stream_timestamps_unavailable"
+                    (
+                        "wasapi_digital_loopback_cross_stream_clock_unverified"
+                        if self._config.diagnostic_mode == "software"
+                        else "cross_stream_clock_unverified"
+                    )
+                    if clock_domain_error is not None
+                    else (
+                        "wasapi_digital_loopback_timestamps_unavailable"
+                        if self._config.diagnostic_mode == "software"
+                        else "dac_adc_stream_timestamps_unavailable"
+                    )
                 ),
                 timing_limitations=(
                     clock_domain_error or "playback_or_capture_time_anchor_unavailable",
@@ -423,7 +431,7 @@ class TestSessionWorker(QObject):
         if scheduled.playback_time_seconds is None or capture_timing.input_adc_time is None:
             return None
         is_software = self._config.diagnostic_mode == "software"
-        if is_software and self._software_clock_domain_error(scheduled) is not None:
+        if self._clock_domain_error(scheduled) is not None:
             return None
         return AudioSynchronizer(
             playback_anchor=SampleTimeAnchor(
@@ -436,18 +444,26 @@ class TestSessionWorker(QObject):
                 device_timestamp_seconds=capture_timing.input_adc_time,
                 sample_rate=self._config.audio.sample_rate,
             ),
-            capture_clock_offset_seconds=None,
+            capture_clock_offset_seconds=0.0,
             timing_basis="wasapi_digital_loopback_stream_timestamps" if is_software else None,
         )
 
-    def _software_clock_domain_error(self, scheduled: ScheduledStimulus) -> str | None:
-        if self._config.diagnostic_mode != "software" or self._capture is None:
+    def _clock_domain_error(self, scheduled: ScheduledStimulus) -> str | None:
+        if self._capture is None:
             return None
         capture_domain = self._capture.latest_timing.clock_domain
-        if not scheduled.clock_domain or not capture_domain:
-            return "software_clock_domain_missing"
-        if scheduled.clock_domain != capture_domain:
-            return "software_clock_domain_mismatch"
+        playback_domain = scheduled.clock_domain
+        software_mode = self._config.diagnostic_mode == "software"
+        missing_reason = (
+            "software_clock_domain_missing" if software_mode else "stream_clock_domain_missing"
+        )
+        mismatch_reason = (
+            "software_clock_domain_mismatch" if software_mode else "stream_clock_domain_mismatch"
+        )
+        if not playback_domain or not capture_domain:
+            return missing_reason
+        if playback_domain != capture_domain:
+            return mismatch_reason
         return None
 
     def _run_simulation(
@@ -662,14 +678,24 @@ class TestController(QObject):
         self._reset_session()
 
     def request_save(self) -> None:
-        if self.is_running or self._snapshot is None or not self._snapshot.records:
+        if not self.can_save:
             raise SessionNotAvailableError("当前没有可保存的已完成测量")
-        if self.state not in {TestState.COMPLETED, TestState.USER_STOPPED}:
-            raise SessionNotAvailableError("当前会话已保存或处于不可保存状态")
         if self._save_pending:
             return
         self._save_pending = True
         self.session_save_requested.emit(self._snapshot)
+
+    @property
+    def can_save(self) -> bool:
+        return (
+            not self.is_running
+            and self._snapshot is not None
+            and bool(self._snapshot.records)
+            and (
+                self.state in {TestState.COMPLETED, TestState.USER_STOPPED}
+                or self._state_machine.is_error
+            )
+        )
 
     def mark_saved(self) -> None:
         if self._snapshot is None:
@@ -678,7 +704,6 @@ class TestController(QObject):
         if self.state == TestState.SAVED:
             return
         self._transition(TestState.SAVED)
-        self._snapshot = replace(self._snapshot, terminal_state=TestState.SAVED)
         self.session_saved.emit(self._snapshot)
 
     def notify_save_failed(self, message: str) -> None:

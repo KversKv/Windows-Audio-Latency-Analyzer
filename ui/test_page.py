@@ -77,6 +77,10 @@ _INVALID_REASON_LABELS = {
     "capture_timeline_discontinuous": "采集时间轴不连续",
     "missing_playback_timestamp": "缺少播放 DAC 时间戳",
     "missing_capture_timestamp": "缺少采集 ADC 时间戳",
+    "stream_clock_domain_missing": "播放或采集流没有已验证的共同时间基准",
+    "stream_clock_domain_mismatch": "播放与采集流的时间基准不一致",
+    "software_clock_domain_missing": "播放或数字环回没有已验证的共同时间基准",
+    "software_clock_domain_mismatch": "播放与数字环回的时间基准不一致",
 }
 
 
@@ -448,7 +452,7 @@ class TestPage(QWidget):
         self.stop_button = QPushButton("停止")
         self.clear_button = QPushButton("清空当前会话")
         self.save_button = QPushButton("保存会话")
-        self.save_button.setToolTip("将完整会话和全部单次原始结果保存到 SQLite")
+        self.save_button.setToolTip("将完整或中断会话及已完成的单次原始结果保存到 SQLite")
         for button in (self.start_button, self.stop_button, self.clear_button, self.save_button):
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             controls.addWidget(button)
@@ -1109,6 +1113,14 @@ class TestPage(QWidget):
                 f"完成 {snapshot.completed_count} 次：有效 {snapshot.valid_count}，"
                 f"无效 {snapshot.invalid_count}{simulation_text}{minimum_text}；音频资源已释放"
             )
+        elif snapshot.records:
+            terminal = _STATE_LABELS.get(snapshot.terminal_state, snapshot.terminal_state.name)
+            self.session_status_label.setText(
+                f"会话以“{terminal}”结束；已保留 {snapshot.completed_count} 条测量记录，"
+                "可保存部分会话"
+            )
+        elif snapshot.terminal_state == TestState.USER_STOPPED:
+            self.session_status_label.setText("已停止；没有已完成的测量记录")
         self.session_finished.emit(snapshot)
         self._update_controls()
 
@@ -1195,9 +1207,8 @@ class TestPage(QWidget):
         )
         snapshot = self.controller.snapshot
         self.save_button.setEnabled(
-            not active
+            self.controller.can_save
             and not self.controller.save_pending
-            and self.controller.state in {TestState.COMPLETED, TestState.USER_STOPPED}
             and snapshot is not None
             and bool(snapshot.records)
         )
@@ -1227,16 +1238,26 @@ class TestPage(QWidget):
             return "∞"
         return f"{value:.1f} dB"
 
-    def shutdown(self) -> None:
+    def shutdown(self) -> bool:
         if self._shutting_down:
-            return
+            return True
         self._shutting_down = True
         self._auto_refresh_timer.stop()
-        self.diagnostics_panel.shutdown()
-        self.controller.shutdown()
+        if not self.diagnostics_panel.shutdown() or not self.controller.shutdown():
+            self.resume_after_shutdown()
+            return False
         thread = self._refresh_thread
         if thread is not None and thread.isRunning():
             thread.quit()
             if not thread.wait(2000):
                 logger.warning("设备枚举线程未在 2 秒内结束")
+                self.resume_after_shutdown()
+                return False
+        self._update_controls()
+        return True
+
+    def resume_after_shutdown(self) -> None:
+        self._shutting_down = False
+        self.diagnostics_panel.resume_after_shutdown()
+        self._auto_refresh_timer.start(_AUTO_REFRESH_INTERVAL_MS)
         self._update_controls()
